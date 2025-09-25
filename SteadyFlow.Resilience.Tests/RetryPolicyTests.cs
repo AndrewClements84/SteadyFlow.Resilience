@@ -10,11 +10,11 @@ namespace SteadyFlow.Resilience.Tests
             var attempts = 0;
             var policy = new RetryPolicy(maxRetries: 3);
 
-            var result = await policy.ExecuteAsync(async () =>
+            var result = await policy.ExecuteAsync(() =>
             {
                 attempts++;
                 if (attempts < 3) throw new Exception("Fail");
-                return "Success";
+                return Task.FromResult("Success");
             });
 
             Assert.Equal("Success", result);
@@ -28,7 +28,7 @@ namespace SteadyFlow.Resilience.Tests
 
             await Assert.ThrowsAsync<Exception>(async () =>
             {
-                await policy.ExecuteAsync(async () =>
+                await policy.ExecuteAsync(() =>
                 {
                     throw new Exception("Always fails");
                 });
