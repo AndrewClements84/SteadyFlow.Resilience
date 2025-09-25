@@ -3,7 +3,7 @@
 ✨ Lightweight resilience toolkit for .NET  
 Retry policies · Rate limiting · Batch processing  
 
-[![Build Status](https://github.com/AndrewClements84/SteadyFlow.Resilience/actions/workflows/dotnet.yml/badge.svg?branch=main)](https://github.com/AndrewClements84/SteadyFlow.Resilience/actions/workflows/dotnet.yml)
+[![.NET Build & Tests](https://github.com/AndrewClements84/SteadyFlow.Resilience/actions/workflows/dotnet.yml/badge.svg?branch=main)](https://github.com/AndrewClements84/SteadyFlow.Resilience/actions/workflows/dotnet.yml)
 [![NuGet](https://img.shields.io/nuget/v/SteadyFlow.Resilience)](https://www.nuget.org/packages/SteadyFlow.Resilience)
 [![NuGet Downloads](https://img.shields.io/nuget/dt/SteadyFlow.Resilience)](https://www.nuget.org/packages/SteadyFlow.Resilience)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
