@@ -1,0 +1,15 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+    <PackageId>SteadyFlow</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>Andrew Clements</Authors>
+    <Company>Andrew Clements</Company>
+    <Description>SteadyFlow: A modern resilience toolkit for .NET apps.</Description>
+    <RepositoryUrl>https://github.com/yourgithub/SteadyFlow</RepositoryUrl>
+    <PackageTags>resilience;retry;ratelimit;backoff;steadyflow</PackageTags>
+  </PropertyGroup>
+
+</Project>
