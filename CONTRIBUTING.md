@@ -13,7 +13,7 @@ We welcome contributions of all kinds — from small bug fixes to major new feat
    - Clone your fork locally
 
    ```bash
-   git clone https://github.com/YOUR-USERNAME/SteadyFlow.Resilience.git
+   git clone https://github.com/AndrewClements84/SteadyFlow.Resilience.git
    cd SteadyFlow.Resilience
    ```
 
