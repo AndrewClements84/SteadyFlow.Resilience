@@ -26,3 +26,5 @@ Once published to NuGet:
 
 ```bash
 dotnet add package SteadyFlow.Resilience
+
+🚀 Usage Examples
