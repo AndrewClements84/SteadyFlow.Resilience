@@ -4,12 +4,13 @@
 name: .NET Build, Test & Publish
 
 on:
+  workflow_dispatch:    # allows manual trigger
   push:
     branches: [ main ]
   pull_request:
     branches: [ main ]
   release:
-    types: [published]   # Only run NuGet publish when you create a GitHub Release
+    types: [published]
 
 jobs:
   build:
