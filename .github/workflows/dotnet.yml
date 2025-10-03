@@ -1,13 +1,13 @@
 name: .NET Build, Test & Publish
 
 on:
-  workflow_dispatch:    # allows manual trigger
+  workflow_dispatch:    # manual trigger
   push:
-    branches: [ main ]
+    branches: [ master ]
+    tags:
+      - 'v*'            # trigger publish job only on version tags
   pull_request:
-    branches: [ main ]
-  release:
-    types: [published]
+    branches: [ master ]
 
 jobs:
   build:
@@ -33,14 +33,14 @@ jobs:
         uses: codecov/codecov-action@v4
         with:
           token: ${{ secrets.CODECOV_TOKEN }} # not needed for public repos
-          files: ./TestResults/coverage.opencover.xml
+          files: ./SteadyFlow.Resilience.Tests/TestResults/coverage.opencover.xml
           flags: unittests
           fail_ci_if_error: true
 
   publish:
     needs: build
     runs-on: ubuntu-latest
-    if: github.event_name == 'release'
+    if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
 
