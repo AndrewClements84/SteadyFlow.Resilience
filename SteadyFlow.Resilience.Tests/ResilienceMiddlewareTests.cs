@@ -51,5 +51,19 @@ namespace SteadyFlow.Resilience.Tests
 
             Assert.Equal(2, attempts); // retried once
         }
+
+        [Fact]
+        public void Constructor_Should_Throw_When_Next_IsNull()
+        {
+            Assert.Throws<ArgumentNullException>(() =>
+                new ResilienceMiddleware(null, new ResiliencePipeline(new ResilienceOptions())));
+        }
+
+        [Fact]
+        public void Constructor_Should_Throw_When_Pipeline_IsNull()
+        {
+            Assert.Throws<ArgumentNullException>(() =>
+                new ResilienceMiddleware(ctx => Task.CompletedTask, null));
+        }
     }
 }
