@@ -71,7 +71,6 @@ namespace SteadyFlow.Resilience.Tests
         [Fact]
         public async Task Integration_Retry_CircuitBreaker_RateLimit_WorkTogether()
         {
-            // Arrange
             var retry = new RetryPolicy(maxRetries: 2, initialDelayMs: 50);
             var breaker = new CircuitBreakerPolicy(failureThreshold: 2, openDuration: TimeSpan.FromMilliseconds(500));
             var limiter = new TokenBucketRateLimiter(capacity: 2, refillRatePerSecond: 1);
@@ -89,7 +88,6 @@ namespace SteadyFlow.Resilience.Tests
             var tasks = new List<Task>();
             var attemptMap = new Dictionary<int, int>();
 
-            // Act
             for (int i = 1; i <= 4; i++)
             {
                 int value = i;
@@ -99,12 +97,10 @@ namespace SteadyFlow.Resilience.Tests
                 {
                     await limiter.WaitForAvailabilityAsync();
 
-                    // Define action as a Func<Task> (matches the extension method signature)
-                    Func<Task> action = async () =>
+                    // core action
+                    Func<Task> coreAction = async () =>
                     {
                         attemptMap[value]++;
-
-                        // Fail once for even numbers
                         if (value % 2 == 0 && attemptMap[value] == 1)
                             throw new Exception("Simulated transient failure");
 
@@ -112,18 +108,15 @@ namespace SteadyFlow.Resilience.Tests
                         await Task.CompletedTask;
                     };
 
-                    // Apply Retry, then Circuit Breaker
-                    await action.WithRetryAsync(retry);
-                    await action.WithCircuitBreakerAsync(breaker);
+                    // Wrap retry first, then breaker
+                    Func<Task> resilientAction = () => coreAction.WithRetryAsync(retry);
+                    await resilientAction.WithCircuitBreakerAsync(breaker);
                 }));
             }
 
             await Task.WhenAll(tasks);
+            await Task.Delay(400); // let batcher flush
 
-            // Let batcher flush
-            await Task.Delay(400);
-
-            // Assert
             Assert.Equal(4, processed.Count);
             foreach (var v in new[] { 1, 2, 3, 4 })
                 Assert.Contains(v, processed);
@@ -135,11 +128,8 @@ namespace SteadyFlow.Resilience.Tests
         public async Task Integration_CircuitBreaker_Should_Open_On_TooManyFailures()
         {
             // Arrange
-            var retry = new RetryPolicy(maxRetries: 1, initialDelayMs: 10);
             var breaker = new CircuitBreakerPolicy(failureThreshold: 2, openDuration: TimeSpan.FromMilliseconds(200));
-            var limiter = new TokenBucketRateLimiter(capacity: 1, refillRatePerSecond: 1);
-
-            var attempts = 0;
+            int attempts = 0;
 
             Func<Task> alwaysFailingAction = () =>
             {
@@ -147,16 +137,16 @@ namespace SteadyFlow.Resilience.Tests
                 throw new Exception("Always fails");
             };
 
-            // Act: Trip the breaker
-            await Assert.ThrowsAsync<Exception>(() => alwaysFailingAction.WithRetryAsync(retry));
-            await Assert.ThrowsAsync<Exception>(() => alwaysFailingAction.WithRetryAsync(retry));
+            // Act: Trip the breaker directly (not via retry)
+            await Assert.ThrowsAsync<Exception>(() => alwaysFailingAction.WithCircuitBreakerAsync(breaker));
+            await Assert.ThrowsAsync<Exception>(() => alwaysFailingAction.WithCircuitBreakerAsync(breaker));
 
             // Now breaker should be open
             await Assert.ThrowsAsync<CircuitBreakerOpenException>(() => alwaysFailingAction.WithCircuitBreakerAsync(breaker));
 
             // Assert
             Assert.Equal(CircuitState.Open, breaker.State);
-            Assert.True(attempts >= 2);
+            Assert.Equal(2, attempts); // breaker tripped after 2 failures
         }
     }
 }
