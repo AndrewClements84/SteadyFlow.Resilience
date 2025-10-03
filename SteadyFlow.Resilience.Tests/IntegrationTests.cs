@@ -90,14 +90,19 @@ namespace SteadyFlow.Resilience.Tests
 
                 Func<Task> action = async () =>
                 {
-                    await limiter.WaitForAvailabilityAsync();
                     attemptMap[value]++;
+
+                    // Fail once for even numbers
                     if (value % 2 == 0 && attemptMap[value] == 1)
-                        throw new Exception("Transient failure");
+                        throw new Exception("Simulated transient failure");
+
                     processed.Add(value);
+                    await Task.CompletedTask;
                 };
 
+                // Build fluent pipeline
                 var pipeline = action
+                    .WithTokenBucketAsync(limiter)
                     .WithRetryAsync(retry)
                     .WithCircuitBreakerAsync(breaker);
 
@@ -106,7 +111,12 @@ namespace SteadyFlow.Resilience.Tests
 
             await Task.WhenAll(tasks);
 
+            // Assert all values processed
             Assert.Equal(4, processed.Count);
+            foreach (var v in new[] { 1, 2, 3, 4 })
+                Assert.Contains(v, processed);
+
+            // Breaker should still be closed
             Assert.Equal(CircuitState.Closed, breaker.State);
         }
 

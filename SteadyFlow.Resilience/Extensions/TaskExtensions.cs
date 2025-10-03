@@ -36,5 +36,21 @@ namespace SteadyFlow.Resilience.Extensions
                 await limiter.WaitForAvailabilityAsync();
                 await action();
             };
+
+        // --- Token Bucket Rate Limiter ---
+
+        public static Func<Task<T>> WithTokenBucketAsync<T>(this Func<Task<T>> action, TokenBucketRateLimiter limiter)
+            => async () =>
+            {
+                await limiter.WaitForAvailabilityAsync();
+                return await action();
+            };
+
+        public static Func<Task> WithTokenBucketAsync(this Func<Task> action, TokenBucketRateLimiter limiter)
+            => async () =>
+            {
+                await limiter.WaitForAvailabilityAsync();
+                await action();
+            };
     }
 }

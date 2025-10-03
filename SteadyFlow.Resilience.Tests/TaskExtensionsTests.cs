@@ -185,5 +185,66 @@ namespace SteadyFlow.Resilience.Tests
             Assert.Equal(CircuitState.Open, breaker.State);
             Assert.Equal(1, attempts);
         }
+
+        [Fact]
+        public async Task WithTokenBucketAsync_FuncTaskT_ExecutesSuccessfully()
+        {
+            var limiter = new TokenBucketRateLimiter(capacity: 2, refillRatePerSecond: 1);
+
+            Func<Task<int>> action = async () =>
+            {
+                await Task.Delay(5);
+                return 101;
+            };
+
+            var pipeline = action.WithTokenBucketAsync(limiter);
+            var result = await pipeline();
+
+            Assert.Equal(101, result);
+        }
+
+        [Fact]
+        public async Task WithTokenBucketAsync_FuncTask_ExecutesSuccessfully()
+        {
+            var limiter = new TokenBucketRateLimiter(capacity: 1, refillRatePerSecond: 1);
+            bool executed = false;
+
+            Func<Task> action = async () =>
+            {
+                executed = true;
+                await Task.CompletedTask;
+            };
+
+            var pipeline = action.WithTokenBucketAsync(limiter);
+            await pipeline();
+
+            Assert.True(executed);
+        }
+
+        [Fact]
+        public async Task WithTokenBucketAsync_Should_Block_When_Tokens_Exhausted()
+        {
+            var limiter = new TokenBucketRateLimiter(capacity: 1, refillRatePerSecond: 1);
+            int executions = 0;
+
+            Func<Task> action = async () =>
+            {
+                executions++;
+                await Task.CompletedTask;
+            };
+
+            var pipeline = action.WithTokenBucketAsync(limiter);
+
+            // First execution should pass immediately
+            await pipeline();
+
+            // Second execution should block until refill
+            var start = DateTime.UtcNow;
+            await pipeline();
+            var elapsed = DateTime.UtcNow - start;
+
+            Assert.True(elapsed >= TimeSpan.FromMilliseconds(500)); // ~1 second refill, so >500ms is safe
+            Assert.Equal(2, executions);
+        }
     }
 }
