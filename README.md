@@ -1,7 +1,7 @@
 # SteadyFlow.Resilience
 
 ✨ Lightweight resilience toolkit for .NET  
-Retry policies · Circuit Breaker · Rate limiting (Token Bucket & Sliding Window) · Batch processing  
+Retry policies · Circuit Breaker · Rate limiting (Token Bucket & Sliding Window) · Batch processing · ASP.NET Core Middleware  
 
 [![.NET Build, Test & Publish](https://github.com/AndrewClements84/SteadyFlow.Resilience/actions/workflows/dotnet.yml/badge.svg?branch=master)](https://github.com/AndrewClements84/SteadyFlow.Resilience/actions/workflows/dotnet.yml) 
 [![codecov](https://codecov.io/gh/AndrewClements84/SteadyFlow.Resilience/branch/master/graph/badge.svg)](https://codecov.io/gh/AndrewClements84/SteadyFlow.Resilience)
@@ -20,7 +20,8 @@ Retry policies · Circuit Breaker · Rate limiting (Token Bucket & Sliding Windo
   - Token Bucket algorithm with async wait support  
   - Sliding Window algorithm for API-style quotas  
 - **Batch Processing** – collect items into timed or size-based batches  
-- **Fluent Chaining** – build resilience pipelines naturally with `.WithRetryAsync().WithCircuitBreakerAsync().WithSlidingWindowAsync()`  
+- **ASP.NET Core Middleware** – plug resilience directly into your web app pipeline  
+- **Fluent Chaining** – build resilience pipelines naturally with `.WithRetryAsync().WithCircuitBreakerAsync().WithSlidingWindowAsync().WithTokenBucketAsync()`  
 - **Async-first** – designed for modern .NET apps  
 - **Lightweight** – zero external dependencies  
 - **100% Test Coverage** – verified with xUnit + Codecov  
@@ -138,7 +139,7 @@ for (int i = 0; i < 6; i++)
 
 ---
 
-### 🔗 Fluent Integration Example (Retry + CircuitBreaker + SlidingWindow)
+### 🔗 Fluent Integration Example (Retry + CircuitBreaker + TokenBucket)
 
 ```csharp
 using SteadyFlow.Resilience.Extensions;
@@ -146,7 +147,7 @@ using SteadyFlow.Resilience.Policies;
 using SteadyFlow.Resilience.RateLimiting;
 using SteadyFlow.Resilience.Retry;
 
-var limiter = new SlidingWindowRateLimiter(maxRequests: 2, window: TimeSpan.FromSeconds(5));
+var limiter = new TokenBucketRateLimiter(capacity: 2, refillRatePerSecond: 1);
 var retry = new RetryPolicy(maxRetries: 3, initialDelayMs: 100);
 var breaker = new CircuitBreakerPolicy(failureThreshold: 2, openDuration: TimeSpan.FromSeconds(10));
 
@@ -159,11 +160,33 @@ Func<Task> action = async () =>
 };
 
 var pipeline = action
-    .WithSlidingWindowAsync(limiter)
+    .WithTokenBucketAsync(limiter)
     .WithRetryAsync(retry)
     .WithCircuitBreakerAsync(breaker);
 
 await pipeline();
+```
+
+---
+
+### 🌐 ASP.NET Core Middleware
+
+```csharp
+public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
+{
+    app.UseResiliencePipeline(options =>
+    {
+        options.Retry = new RetryPolicy(maxRetries: 3);
+        options.CircuitBreaker = new CircuitBreakerPolicy(failureThreshold: 5, openDuration: TimeSpan.FromSeconds(30));
+        options.SlidingWindowLimiter = new SlidingWindowRateLimiter(maxRequests: 100, window: TimeSpan.FromMinutes(1));
+    });
+
+    app.UseRouting();
+    app.UseEndpoints(endpoints =>
+    {
+        endpoints.MapControllers();
+    });
+}
 ```
 
 ---
@@ -173,7 +196,9 @@ await pipeline();
 The project includes a full **xUnit test suite**:
 
 - ✅ Unit tests for RetryPolicy, CircuitBreaker, TokenBucket, SlidingWindow, and BatchProcessor  
+- ✅ Unit tests for ResiliencePipeline and Middleware  
 - ✅ Integration tests combining multiple policies  
+- ✅ Middleware integration tests (Retry, CircuitBreaker, TokenBucket, SlidingWindow)  
 - ✅ CI/CD workflow runs all tests on every commit (via GitHub Actions + Codecov)  
 - ✅ **100% code coverage enforced**  
 
@@ -189,7 +214,7 @@ dotnet test
 
 - [x] Add Circuit Breaker policy  
 - [x] Support sliding window rate limiter  
-- [ ] ASP.NET middleware integration  
+- [x] ASP.NET middleware integration  
 - [ ] Metrics & observability hooks  
 - [ ] Configurable backoff strategies (jitter, linear, Fibonacci)  
 
