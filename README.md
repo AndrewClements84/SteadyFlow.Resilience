@@ -1,7 +1,7 @@
 # SteadyFlow.Resilience
 
 ✨ Lightweight resilience toolkit for .NET  
-Retry policies · Circuit breaker · Rate limiting · Batch processing  
+Retry policies · Circuit Breaker · Rate limiting (Token Bucket & Sliding Window) · Batch processing  
 
 [![.NET Build, Test & Publish](https://github.com/AndrewClements84/SteadyFlow.Resilience/actions/workflows/dotnet.yml/badge.svg?branch=master)](https://github.com/AndrewClements84/SteadyFlow.Resilience/actions/workflows/dotnet.yml) 
 [![codecov](https://codecov.io/gh/AndrewClements84/SteadyFlow.Resilience/branch/master/graph/badge.svg)](https://codecov.io/gh/AndrewClements84/SteadyFlow.Resilience)
@@ -15,15 +15,21 @@ Retry policies · Circuit breaker · Rate limiting · Batch processing
 ## ✨ Features
 
 - **Retry Policy** – automatic retries with exponential backoff  
-- **Circuit Breaker** – prevent cascading failures with open/half-open states  
-- **Rate Limiting** – token bucket algorithm with async wait support  
+- **Circuit Breaker** – stop cascading failures after repeated errors  
+- **Rate Limiting**  
+  - Token Bucket algorithm with async wait support  
+  - Sliding Window algorithm for API-style quotas  
 - **Batch Processing** – collect items into timed or size-based batches  
+- **Fluent Chaining** – build resilience pipelines naturally with `.WithRetryAsync().WithCircuitBreakerAsync().WithSlidingWindowAsync()`  
 - **Async-first** – designed for modern .NET apps  
-- **Lightweight** – no external dependencies  
+- **Lightweight** – zero external dependencies  
+- **100% Test Coverage** – verified with xUnit + Codecov  
 
 ---
 
 ## 📦 Installation
+
+Once published to NuGet:
 
 ```bash
 dotnet add package SteadyFlow.Resilience
@@ -38,50 +44,24 @@ dotnet add package SteadyFlow.Resilience
 ```csharp
 using SteadyFlow.Resilience.Retry;
 
-var policy = new RetryPolicy(maxRetries: 5, initialDelayMs: 200);
+var retry = new RetryPolicy(maxRetries: 5, initialDelayMs: 200);
 
-var result = await policy.ExecuteAsync(async () =>
+Func<Task<string>> unreliableAction = async () =>
 {
     if (new Random().Next(2) == 0)
         throw new Exception("Transient failure");
-
     return "Success!";
-});
+};
+
+var pipeline = unreliableAction.WithRetryAsync(retry);
+var result = await pipeline();
+
+Console.WriteLine(result);
 ```
 
 ---
 
-### ⛔ Circuit Breaker
-
-```csharp
-using SteadyFlow.Resilience.Policies;
-
-var breaker = new CircuitBreakerPolicy(failureThreshold: 3, openDuration: TimeSpan.FromSeconds(10));
-
-try
-{
-    await breaker.ExecuteAsync(async () =>
-    {
-        // risky call
-        throw new Exception("Failure");
-    });
-}
-catch (CircuitBreakerOpenException)
-{
-    Console.WriteLine("Circuit is open, fast-failing!");
-}
-```
-
-You can also use the extension methods for a fluent style:
-
-```csharp
-Func<Task> action = async () => { /* risky work */ await Task.CompletedTask; };
-await action.WithCircuitBreakerAsync(breaker);
-```
-
----
-
-### ⏳ Rate Limiting with Token Bucket
+### ⏳ Token Bucket Rate Limiting
 
 ```csharp
 using SteadyFlow.Resilience.RateLimiting;
@@ -120,7 +100,45 @@ for (int i = 0; i < 10; i++)
 
 ---
 
-### 🔗 Integration Example (Retry + Circuit Breaker + Rate Limit + Batch)
+### ⚡ Circuit Breaker
+
+```csharp
+using SteadyFlow.Resilience.Policies;
+
+var breaker = new CircuitBreakerPolicy(failureThreshold: 2, openDuration: TimeSpan.FromSeconds(10));
+
+Func<Task> riskyAction = async () =>
+{
+    if (new Random().Next(3) == 0)
+        throw new Exception("Boom!");
+    Console.WriteLine("Success");
+    await Task.CompletedTask;
+};
+
+var pipeline = riskyAction.WithCircuitBreakerAsync(breaker);
+
+await pipeline(); // executes under breaker control
+```
+
+---
+
+### 📊 Sliding Window Rate Limiter
+
+```csharp
+using SteadyFlow.Resilience.RateLimiting;
+
+var limiter = new SlidingWindowRateLimiter(maxRequests: 3, window: TimeSpan.FromSeconds(10));
+
+for (int i = 0; i < 6; i++)
+{
+    await limiter.WaitForAvailabilityAsync();
+    Console.WriteLine($"Request {i} at {DateTime.UtcNow:HH:mm:ss.fff}");
+}
+```
+
+---
+
+### 🔗 Fluent Integration Example (Retry + CircuitBreaker + SlidingWindow)
 
 ```csharp
 using SteadyFlow.Resilience.Extensions;
@@ -128,46 +146,36 @@ using SteadyFlow.Resilience.Policies;
 using SteadyFlow.Resilience.RateLimiting;
 using SteadyFlow.Resilience.Retry;
 
+var limiter = new SlidingWindowRateLimiter(maxRequests: 2, window: TimeSpan.FromSeconds(5));
 var retry = new RetryPolicy(maxRetries: 3, initialDelayMs: 100);
-var breaker = new CircuitBreakerPolicy(failureThreshold: 2, openDuration: TimeSpan.FromSeconds(5));
-var limiter = new TokenBucketRateLimiter(capacity: 2, refillRatePerSecond: 1);
+var breaker = new CircuitBreakerPolicy(failureThreshold: 2, openDuration: TimeSpan.FromSeconds(10));
 
-var batcher = new BatchProcessor<int>(
-    batchSize: 2,
-    interval: TimeSpan.FromSeconds(2),
-    async batch =>
-    {
-        Console.WriteLine($"Processed batch: {string.Join(", ", batch)}");
-        await Task.CompletedTask;
-    });
-
-for (int i = 1; i <= 5; i++)
+Func<Task> action = async () =>
 {
-    int value = i;
+    if (new Random().Next(2) == 0)
+        throw new Exception("Simulated transient failure");
 
-    Func<Task> action = async () =>
-    {
-        await limiter.WaitForAvailabilityAsync();
+    Console.WriteLine("Processed successfully");
+};
 
-        if (value % 2 == 0 && new Random().Next(2) == 0)
-            throw new Exception("Simulated transient failure");
+var pipeline = action
+    .WithSlidingWindowAsync(limiter)
+    .WithRetryAsync(retry)
+    .WithCircuitBreakerAsync(breaker);
 
-        batcher.Add(value);
-    };
-
-    // Retry wrapped inside Circuit Breaker
-    await (() => action.WithRetryAsync(retry)).WithCircuitBreakerAsync(breaker);
-}
+await pipeline();
 ```
 
 ---
 
 ## 🧪 Tests
 
-- ✅ Unit tests for RetryPolicy, CircuitBreakerPolicy, TokenBucketRateLimiter, and BatchProcessor  
-- ✅ TaskExtensions tested for Retry and CircuitBreaker  
-- ✅ Integration tests combining multiple resilience patterns  
-- ✅ 100% code coverage (enforced via Codecov + CI)  
+The project includes a full **xUnit test suite**:
+
+- ✅ Unit tests for RetryPolicy, CircuitBreaker, TokenBucket, SlidingWindow, and BatchProcessor  
+- ✅ Integration tests combining multiple policies  
+- ✅ CI/CD workflow runs all tests on every commit (via GitHub Actions + Codecov)  
+- ✅ **100% code coverage enforced**  
 
 Run locally:
 
@@ -179,11 +187,8 @@ dotnet test
 
 ## 📈 Roadmap
 
-- [x] Add Retry policy  
-- [x] Add Rate Limiting (Token Bucket)  
-- [x] Add Batch Processing  
 - [x] Add Circuit Breaker policy  
-- [ ] Support sliding window rate limiter  
+- [x] Support sliding window rate limiter  
 - [ ] ASP.NET middleware integration  
 - [ ] Metrics & observability hooks  
 - [ ] Configurable backoff strategies (jitter, linear, Fibonacci)  
@@ -192,7 +197,7 @@ dotnet test
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md).
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 1. Fork the repo  
 2. Create a feature branch  
@@ -203,7 +208,8 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## ⭐ Support
 
-If you find **SteadyFlow.Resilience** useful, please consider giving it a star on GitHub — it helps others discover the project and shows your support.
+If you find **SteadyFlow.Resilience** useful, please consider giving it a star on
+GitHub — it helps others discover the project and shows your support.
 
 ---
 
