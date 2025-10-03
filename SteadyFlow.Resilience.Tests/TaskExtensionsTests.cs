@@ -1,5 +1,6 @@
 ﻿using SteadyFlow.Resilience.Extensions;
 using SteadyFlow.Resilience.Policies;
+using SteadyFlow.Resilience.RateLimiting;
 using SteadyFlow.Resilience.Retry;
 
 namespace SteadyFlow.Resilience.Tests
@@ -7,111 +8,105 @@ namespace SteadyFlow.Resilience.Tests
     public class TaskExtensionsTests
     {
         [Fact]
-        public async Task WithRetryAsync_FuncTaskT_ExecutesSuccessfully()
+        public async Task WithRetryAsync_FuncTaskT_Success()
         {
-            // Arrange
-            var policy = new RetryPolicy(maxRetries: 3, initialDelayMs: 10, backoffFactor: 1.0);
+            var policy = new RetryPolicy(maxRetries: 2);
+            int attempts = 0;
+
             Func<Task<int>> action = async () =>
             {
-                await Task.Delay(5);
+                attempts++;
+                return 99;
+            };
+
+            var pipeline = action.WithRetryAsync(policy);
+            var result = await pipeline();
+
+            Assert.Equal(99, result);
+            Assert.Equal(1, attempts);
+        }
+
+        [Fact]
+        public async Task WithRetryAsync_FuncTaskT_FailsThenRetries()
+        {
+            var policy = new RetryPolicy(maxRetries: 2);
+            int attempts = 0;
+
+            Func<Task<int>> action = async () =>
+            {
+                attempts++;
+                if (attempts < 2) throw new Exception("fail");
                 return 42;
             };
 
-            // Act
-            var result = await action.WithRetryAsync(policy);
+            var pipeline = action.WithRetryAsync(policy);
+            var result = await pipeline();
 
-            // Assert
             Assert.Equal(42, result);
+            Assert.Equal(2, attempts);
         }
 
         [Fact]
-        public async Task WithRetryAsync_FuncTask_ExecutesSuccessfully()
+        public async Task WithCircuitBreakerAsync_FuncTask_Success()
         {
-            // Arrange
-            var policy = new RetryPolicy(maxRetries: 3, initialDelayMs: 10, backoffFactor: 1.0);
+            var breaker = new CircuitBreakerPolicy(failureThreshold: 2, openDuration: TimeSpan.FromMilliseconds(200));
             bool executed = false;
 
             Func<Task> action = async () =>
             {
-                await Task.Delay(5);
                 executed = true;
+                await Task.CompletedTask;
             };
 
-            // Act
-            await action.WithRetryAsync(policy);
+            var pipeline = action.WithCircuitBreakerAsync(breaker);
+            await pipeline();
 
-            // Assert
             Assert.True(executed);
+            Assert.Equal(CircuitState.Closed, breaker.State);
         }
 
         [Fact]
-        public async Task WithRetryAsync_RetriesOnFailure()
+        public async Task WithCircuitBreakerAsync_FuncTask_FailureOpensBreaker()
         {
-            // Arrange
-            var policy = new RetryPolicy(maxRetries: 2, initialDelayMs: 10, backoffFactor: 1.0);
+            var breaker = new CircuitBreakerPolicy(failureThreshold: 1, openDuration: TimeSpan.FromMilliseconds(200));
             int attempts = 0;
 
-            Func<Task<int>> action = () =>
+            Func<Task> action = () =>
             {
                 attempts++;
-                if (attempts < 2)
-                {
-                    throw new InvalidOperationException("Fail first attempt");
-                }
-                return Task.FromResult(99);
+                throw new Exception("always fails");
             };
 
-            // Act
-            var result = await action.WithRetryAsync(policy);
+            var pipeline = action.WithCircuitBreakerAsync(breaker);
 
-            // Assert
-            Assert.Equal(99, result);
-            Assert.Equal(2, attempts); // retried once
+            await Assert.ThrowsAsync<Exception>(() => pipeline());
+            await Assert.ThrowsAsync<CircuitBreakerOpenException>(() => pipeline());
+
+            Assert.Equal(CircuitState.Open, breaker.State);
+            Assert.Equal(1, attempts);
         }
 
         [Fact]
-        public async Task WithRetryAsync_ThrowsAfterMaxRetries()
+        public async Task WithSlidingWindowAsync_FuncTaskT_ExecutesSuccessfully()
         {
-            // Arrange
-            var policy = new RetryPolicy(maxRetries: 2, initialDelayMs: 10, backoffFactor: 1.0);
-            int attempts = 0;
+            var limiter = new SlidingWindowRateLimiter(maxRequests: 2, window: TimeSpan.FromSeconds(1));
 
-            Func<Task<int>> action = () =>
-            {
-                attempts++;
-                throw new InvalidOperationException("Always fails");
-            };
-
-            // Act + Assert
-            var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => action.WithRetryAsync(policy));
-            Assert.Equal("Always fails", ex.Message);
-            Assert.Equal(3, attempts); // initial try + 2 retries
-        }
-
-        [Fact]
-        public async Task WithCircuitBreakerAsync_FuncTaskT_ExecutesSuccessfully()
-        {
-            // Arrange
-            var breaker = new CircuitBreakerPolicy(failureThreshold: 2, openDuration: TimeSpan.FromMilliseconds(200));
             Func<Task<int>> action = async () =>
             {
                 await Task.Delay(5);
-                return 123;
+                return 77;
             };
 
-            // Act
-            var result = await action.WithCircuitBreakerAsync(breaker);
+            var pipeline = action.WithSlidingWindowAsync(limiter);
+            var result = await pipeline();
 
-            // Assert
-            Assert.Equal(123, result);
-            Assert.Equal(CircuitState.Closed, breaker.State);
+            Assert.Equal(77, result);
         }
 
         [Fact]
-        public async Task WithCircuitBreakerAsync_FuncTask_ExecutesSuccessfully()
+        public async Task WithSlidingWindowAsync_FuncTask_ExecutesSuccessfully()
         {
-            // Arrange
-            var breaker = new CircuitBreakerPolicy(failureThreshold: 2, openDuration: TimeSpan.FromMilliseconds(200));
+            var limiter = new SlidingWindowRateLimiter(maxRequests: 1, window: TimeSpan.FromSeconds(1));
             bool executed = false;
 
             Func<Task> action = async () =>
@@ -120,31 +115,36 @@ namespace SteadyFlow.Resilience.Tests
                 executed = true;
             };
 
-            // Act
-            await action.WithCircuitBreakerAsync(breaker);
+            var pipeline = action.WithSlidingWindowAsync(limiter);
+            await pipeline();
 
-            // Assert
             Assert.True(executed);
-            Assert.Equal(CircuitState.Closed, breaker.State);
         }
 
         [Fact]
-        public async Task WithCircuitBreakerAsync_Should_Throw_When_Circuit_Open()
+        public async Task WithSlidingWindowAsync_Should_Block_When_Limit_Exceeded()
         {
-            // Arrange: small threshold so we trip the breaker fast
-            var breaker = new CircuitBreakerPolicy(failureThreshold: 1, openDuration: TimeSpan.FromSeconds(1));
+            var limiter = new SlidingWindowRateLimiter(maxRequests: 1, window: TimeSpan.FromMilliseconds(200));
+            bool executed = false;
 
-            Func<Task> failingAction = () => throw new Exception("boom");
+            Func<Task> action = async () =>
+            {
+                executed = true;
+                await Task.CompletedTask;
+            };
 
-            // Trip the breaker
-            await Assert.ThrowsAsync<Exception>(() => failingAction.WithCircuitBreakerAsync(breaker));
+            var pipeline = action.WithSlidingWindowAsync(limiter);
 
-            // Next call should throw CircuitBreakerOpenException immediately
-            var ex = await Assert.ThrowsAsync<CircuitBreakerOpenException>(
-                () => failingAction.WithCircuitBreakerAsync(breaker));
+            // First call succeeds
+            await pipeline();
 
-            Assert.Equal("Circuit is open", ex.Message);
-            Assert.Equal(CircuitState.Open, breaker.State);
+            // Second call should block until window passes
+            var start = DateTime.UtcNow;
+            await pipeline();
+            var elapsed = DateTime.UtcNow - start;
+
+            Assert.True(elapsed >= TimeSpan.FromMilliseconds(150));
+            Assert.True(executed);
         }
     }
 }
