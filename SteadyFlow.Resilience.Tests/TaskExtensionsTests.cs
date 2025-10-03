@@ -1,8 +1,6 @@
-﻿using System;
-using System.Threading.Tasks;
-using SteadyFlow.Resilience.Extensions;
+﻿using SteadyFlow.Resilience.Extensions;
+using SteadyFlow.Resilience.Policies;
 using SteadyFlow.Resilience.Retry;
-using Xunit;
 
 namespace SteadyFlow.Resilience.Tests
 {
@@ -88,6 +86,65 @@ namespace SteadyFlow.Resilience.Tests
             var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => action.WithRetryAsync(policy));
             Assert.Equal("Always fails", ex.Message);
             Assert.Equal(3, attempts); // initial try + 2 retries
+        }
+
+        [Fact]
+        public async Task WithCircuitBreakerAsync_FuncTaskT_ExecutesSuccessfully()
+        {
+            // Arrange
+            var breaker = new CircuitBreakerPolicy(failureThreshold: 2, openDuration: TimeSpan.FromMilliseconds(200));
+            Func<Task<int>> action = async () =>
+            {
+                await Task.Delay(5);
+                return 123;
+            };
+
+            // Act
+            var result = await action.WithCircuitBreakerAsync(breaker);
+
+            // Assert
+            Assert.Equal(123, result);
+            Assert.Equal(CircuitState.Closed, breaker.State);
+        }
+
+        [Fact]
+        public async Task WithCircuitBreakerAsync_FuncTask_ExecutesSuccessfully()
+        {
+            // Arrange
+            var breaker = new CircuitBreakerPolicy(failureThreshold: 2, openDuration: TimeSpan.FromMilliseconds(200));
+            bool executed = false;
+
+            Func<Task> action = async () =>
+            {
+                await Task.Delay(5);
+                executed = true;
+            };
+
+            // Act
+            await action.WithCircuitBreakerAsync(breaker);
+
+            // Assert
+            Assert.True(executed);
+            Assert.Equal(CircuitState.Closed, breaker.State);
+        }
+
+        [Fact]
+        public async Task WithCircuitBreakerAsync_Should_Throw_When_Circuit_Open()
+        {
+            // Arrange: small threshold so we trip the breaker fast
+            var breaker = new CircuitBreakerPolicy(failureThreshold: 1, openDuration: TimeSpan.FromSeconds(1));
+
+            Func<Task> failingAction = () => throw new Exception("boom");
+
+            // Trip the breaker
+            await Assert.ThrowsAsync<Exception>(() => failingAction.WithCircuitBreakerAsync(breaker));
+
+            // Next call should throw CircuitBreakerOpenException immediately
+            var ex = await Assert.ThrowsAsync<CircuitBreakerOpenException>(
+                () => failingAction.WithCircuitBreakerAsync(breaker));
+
+            Assert.Equal("Circuit is open", ex.Message);
+            Assert.Equal(CircuitState.Open, breaker.State);
         }
     }
 }

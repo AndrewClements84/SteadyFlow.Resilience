@@ -1,4 +1,5 @@
-﻿using SteadyFlow.Resilience.Policies;
+﻿using SteadyFlow.Resilience.Extensions;
+using SteadyFlow.Resilience.Policies;
 using SteadyFlow.Resilience.RateLimiting;
 using SteadyFlow.Resilience.Retry;
 
@@ -7,7 +8,7 @@ namespace SteadyFlow.Resilience.Tests
     public class IntegrationTests
     {
         [Fact]
-        public async Task FullIntegrationTest_RetryRateLimitBatching_Reliable()
+        public async Task Integration_Retry_RateLimit_Batching_Baseline()
         {
             // Arrange
             var limiter = new TokenBucketRateLimiter(capacity: 3, refillRatePerSecond: 2);
@@ -65,6 +66,97 @@ namespace SteadyFlow.Resilience.Tests
             {
                 Assert.StartsWith("Processed", r);
             }
+        }
+
+        [Fact]
+        public async Task Integration_Retry_CircuitBreaker_RateLimit_WorkTogether()
+        {
+            // Arrange
+            var retry = new RetryPolicy(maxRetries: 2, initialDelayMs: 50);
+            var breaker = new CircuitBreakerPolicy(failureThreshold: 2, openDuration: TimeSpan.FromMilliseconds(500));
+            var limiter = new TokenBucketRateLimiter(capacity: 2, refillRatePerSecond: 1);
+
+            var processed = new List<int>();
+            var batcher = new BatchProcessor<int>(
+                batchSize: 2,
+                interval: TimeSpan.FromMilliseconds(200),
+                async batch =>
+                {
+                    processed.AddRange(batch);
+                    await Task.CompletedTask;
+                });
+
+            var tasks = new List<Task>();
+            var attemptMap = new Dictionary<int, int>();
+
+            // Act
+            for (int i = 1; i <= 4; i++)
+            {
+                int value = i;
+                attemptMap[value] = 0;
+
+                tasks.Add(Task.Run(async () =>
+                {
+                    await limiter.WaitForAvailabilityAsync();
+
+                    // Define action as a Func<Task> (matches the extension method signature)
+                    Func<Task> action = async () =>
+                    {
+                        attemptMap[value]++;
+
+                        // Fail once for even numbers
+                        if (value % 2 == 0 && attemptMap[value] == 1)
+                            throw new Exception("Simulated transient failure");
+
+                        batcher.Add(value);
+                        await Task.CompletedTask;
+                    };
+
+                    // Apply Retry, then Circuit Breaker
+                    await action.WithRetryAsync(retry);
+                    await action.WithCircuitBreakerAsync(breaker);
+                }));
+            }
+
+            await Task.WhenAll(tasks);
+
+            // Let batcher flush
+            await Task.Delay(400);
+
+            // Assert
+            Assert.Equal(4, processed.Count);
+            foreach (var v in new[] { 1, 2, 3, 4 })
+                Assert.Contains(v, processed);
+
+            Assert.Equal(CircuitState.Closed, breaker.State);
+        }
+
+        [Fact]
+        public async Task Integration_CircuitBreaker_Should_Open_On_TooManyFailures()
+        {
+            // Arrange
+            var retry = new RetryPolicy(maxRetries: 1, initialDelayMs: 10);
+            var breaker = new CircuitBreakerPolicy(failureThreshold: 2, openDuration: TimeSpan.FromMilliseconds(200));
+            var limiter = new TokenBucketRateLimiter(capacity: 1, refillRatePerSecond: 1);
+
+            var attempts = 0;
+
+            Func<Task> alwaysFailingAction = () =>
+            {
+                attempts++;
+                throw new Exception("Always fails");
+            };
+
+            // Act: Trip the breaker
+            await Assert.ThrowsAsync<Exception>(() => alwaysFailingAction.WithRetryAsync(retry));
+            await Assert.ThrowsAsync<Exception>(() => alwaysFailingAction.WithRetryAsync(retry));
+
+            // Now breaker should be open
+            await Assert.ThrowsAsync<CircuitBreakerOpenException>(() => alwaysFailingAction.WithCircuitBreakerAsync(breaker));
+
+            // Assert
+            Assert.Equal(CircuitState.Open, breaker.State);
+            Assert.True(attempts >= 2);
         }
     }
 }
