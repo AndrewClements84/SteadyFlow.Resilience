@@ -94,5 +94,18 @@ namespace SteadyFlow.Resilience.Tests
             Assert.True(elapsed >= TimeSpan.FromMilliseconds(500));
             Assert.Equal(2, executed);
         }
+
+        [Fact]
+        public void Constructor_Should_Throw_When_Options_IsNull()
+        {
+            Assert.Throws<ArgumentNullException>(() => new ResiliencePipeline(null));
+        }
+
+        [Fact]
+        public void Build_Should_Throw_When_Action_IsNull()
+        {
+            var pipeline = new ResiliencePipeline(new ResilienceOptions());
+            Assert.Throws<ArgumentNullException>(() => pipeline.Build(null));
+        }
     }
 }
