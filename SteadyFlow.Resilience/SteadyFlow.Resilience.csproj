@@ -3,11 +3,18 @@
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
     <PackageId>SteadyFlow.Resilience</PackageId>
-    <Version>0.1.1</Version>
+    <Version>0.1.2</Version>
     <Authors>Andrew Clements</Authors>
-    <Company>Andrew Clements</Company>
-    <Description>Lightweight resilience toolkit for .NET: retry policies, rate limiting, and batch processing.</Description>
-    <PackageTags>resilience retry rate-limiting batching steadyflow</PackageTags>
+    <Company>SteadyFlow</Company>
+	  <Description>
+		  SteadyFlow.Resilience is a lightweight resilience toolkit for .NET, designed with modern async-first patterns.
+		  It provides retry policies with exponential backoff, circuit breaker protection, flexible rate limiting
+		  (Token Bucket and Sliding Window), batch processing, and fluent chaining for building resilience pipelines.
+		  Includes ASP.NET Core middleware integration and is fully covered by tests (100% coverage).
+	  </Description>
+	  <PackageTags>
+		  resilience retry circuit-breaker rate-limiting batching middleware sliding-window token-bucket async-dotnet steadyflow
+	  </PackageTags>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://github.com/AndrewClements84/SteadyFlow.Resilience</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
