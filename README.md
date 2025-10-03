@@ -163,6 +163,13 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
 
 ---
 
+## ⭐ Support
+
+If you find **ByteFlow.Net** useful, please consider giving it a star on
+GitHub --- it helps others discover the project and shows your support.
+
+---
+
 ## 📄 License
 
 Licensed under the **MIT License** – see [LICENSE](LICENSE) for details.
