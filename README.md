@@ -1,7 +1,7 @@
 # SteadyFlow.Resilience
 
 ✨ Lightweight resilience toolkit for .NET  
-Retry policies · Rate limiting · Batch processing  
+Retry policies · Circuit breaker · Rate limiting · Batch processing  
 
 [![.NET Build, Test & Publish](https://github.com/AndrewClements84/SteadyFlow.Resilience/actions/workflows/dotnet.yml/badge.svg?branch=master)](https://github.com/AndrewClements84/SteadyFlow.Resilience/actions/workflows/dotnet.yml) 
 [![codecov](https://codecov.io/gh/AndrewClements84/SteadyFlow.Resilience/branch/master/graph/badge.svg)](https://codecov.io/gh/AndrewClements84/SteadyFlow.Resilience)
@@ -15,6 +15,7 @@ Retry policies · Rate limiting · Batch processing
 ## ✨ Features
 
 - **Retry Policy** – automatic retries with exponential backoff  
+- **Circuit Breaker** – prevent cascading failures with open/half-open states  
 - **Rate Limiting** – token bucket algorithm with async wait support  
 - **Batch Processing** – collect items into timed or size-based batches  
 - **Async-first** – designed for modern .NET apps  
@@ -23,8 +24,6 @@ Retry policies · Rate limiting · Batch processing
 ---
 
 ## 📦 Installation
-
-Once published to NuGet:
 
 ```bash
 dotnet add package SteadyFlow.Resilience
@@ -37,20 +36,47 @@ dotnet add package SteadyFlow.Resilience
 ### 🔁 Retry with Exponential Backoff
 
 ```csharp
-using SteadyFlow.Retry;
+using SteadyFlow.Resilience.Retry;
 
 var policy = new RetryPolicy(maxRetries: 5, initialDelayMs: 200);
 
 var result = await policy.ExecuteAsync(async () =>
 {
-    // Simulate an unreliable call
     if (new Random().Next(2) == 0)
         throw new Exception("Transient failure");
 
     return "Success!";
 });
+```
 
-Console.WriteLine(result);
+---
+
+### ⛔ Circuit Breaker
+
+```csharp
+using SteadyFlow.Resilience.Policies;
+
+var breaker = new CircuitBreakerPolicy(failureThreshold: 3, openDuration: TimeSpan.FromSeconds(10));
+
+try
+{
+    await breaker.ExecuteAsync(async () =>
+    {
+        // risky call
+        throw new Exception("Failure");
+    });
+}
+catch (CircuitBreakerOpenException)
+{
+    Console.WriteLine("Circuit is open, fast-failing!");
+}
+```
+
+You can also use the extension methods for a fluent style:
+
+```csharp
+Func<Task> action = async () => { /* risky work */ await Task.CompletedTask; };
+await action.WithCircuitBreakerAsync(breaker);
 ```
 
 ---
@@ -58,7 +84,7 @@ Console.WriteLine(result);
 ### ⏳ Rate Limiting with Token Bucket
 
 ```csharp
-using SteadyFlow.RateLimiting;
+using SteadyFlow.Resilience.RateLimiting;
 
 var limiter = new TokenBucketRateLimiter(capacity: 5, refillRatePerSecond: 2);
 
@@ -74,7 +100,7 @@ for (int i = 0; i < 10; i++)
 ### 📦 Batch Processing
 
 ```csharp
-using SteadyFlow.Policies;
+using SteadyFlow.Resilience.Policies;
 
 var batcher = new BatchProcessor<int>(
     batchSize: 3,
@@ -88,21 +114,23 @@ var batcher = new BatchProcessor<int>(
 for (int i = 0; i < 10; i++)
 {
     batcher.Add(i);
-    await Task.Delay(500); // simulate incoming data
+    await Task.Delay(500);
 }
 ```
 
 ---
 
-### 🔗 Integration Example (Retry + Rate Limit + Batch)
+### 🔗 Integration Example (Retry + Circuit Breaker + Rate Limit + Batch)
 
 ```csharp
-using SteadyFlow.Retry;
-using SteadyFlow.RateLimiting;
-using SteadyFlow.Policies;
+using SteadyFlow.Resilience.Extensions;
+using SteadyFlow.Resilience.Policies;
+using SteadyFlow.Resilience.RateLimiting;
+using SteadyFlow.Resilience.Retry;
 
-var limiter = new TokenBucketRateLimiter(capacity: 3, refillRatePerSecond: 2);
 var retry = new RetryPolicy(maxRetries: 3, initialDelayMs: 100);
+var breaker = new CircuitBreakerPolicy(failureThreshold: 2, openDuration: TimeSpan.FromSeconds(5));
+var limiter = new TokenBucketRateLimiter(capacity: 2, refillRatePerSecond: 1);
 
 var batcher = new BatchProcessor<int>(
     batchSize: 2,
@@ -115,17 +143,20 @@ var batcher = new BatchProcessor<int>(
 
 for (int i = 1; i <= 5; i++)
 {
-    var index = i;
-    await retry.ExecuteAsync(async () =>
+    int value = i;
+
+    Func<Task> action = async () =>
     {
         await limiter.WaitForAvailabilityAsync();
 
-        // Fail first time for even numbers, succeed on retry
-        if (index % 2 == 0 && new Random().Next(2) == 0)
+        if (value % 2 == 0 && new Random().Next(2) == 0)
             throw new Exception("Simulated transient failure");
 
-        batcher.Add(index);
-    });
+        batcher.Add(value);
+    };
+
+    // Retry wrapped inside Circuit Breaker
+    await (() => action.WithRetryAsync(retry)).WithCircuitBreakerAsync(breaker);
 }
 ```
 
@@ -133,11 +164,10 @@ for (int i = 1; i <= 5; i++)
 
 ## 🧪 Tests
 
-The project includes a full **xUnit test suite**:
-
-- ✅ Unit tests for RetryPolicy, TokenBucketRateLimiter, and BatchProcessor  
-- ✅ Integration tests combining all features  
-- ✅ CI/CD workflow runs all tests on every commit (via GitHub Actions)  
+- ✅ Unit tests for RetryPolicy, CircuitBreakerPolicy, TokenBucketRateLimiter, and BatchProcessor  
+- ✅ TaskExtensions tested for Retry and CircuitBreaker  
+- ✅ Integration tests combining multiple resilience patterns  
+- ✅ 100% code coverage (enforced via Codecov + CI)  
 
 Run locally:
 
@@ -149,7 +179,10 @@ dotnet test
 
 ## 📈 Roadmap
 
-- [ ] Add Circuit Breaker policy  
+- [x] Add Retry policy  
+- [x] Add Rate Limiting (Token Bucket)  
+- [x] Add Batch Processing  
+- [x] Add Circuit Breaker policy  
 - [ ] Support sliding window rate limiter  
 - [ ] ASP.NET middleware integration  
 - [ ] Metrics & observability hooks  
@@ -159,7 +192,7 @@ dotnet test
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 1. Fork the repo  
 2. Create a feature branch  
@@ -170,12 +203,10 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
 
 ## ⭐ Support
 
-If you find **SteadyFlow.Resilience** useful, please consider giving it a star on
-GitHub --- it helps others discover the project and shows your support.
+If you find **SteadyFlow.Resilience** useful, please consider giving it a star on GitHub — it helps others discover the project and shows your support.
 
 ---
 
 ## 📄 License
 
 Licensed under the **MIT License** – see [LICENSE](LICENSE) for details.
-
