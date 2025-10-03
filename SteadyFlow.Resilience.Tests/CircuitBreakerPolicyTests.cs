@@ -52,5 +52,21 @@ namespace SteadyFlow.Resilience.Tests
             Assert.Equal("success", result);
             Assert.Equal(CircuitState.Closed, breaker.State);
         }
+
+        [Fact]
+        public async Task Should_Execute_VoidTask_Action_Successfully()
+        {
+            var breaker = new CircuitBreakerPolicy(failureThreshold: 2, openDuration: TimeSpan.FromMilliseconds(200));
+            bool executed = false;
+
+            await breaker.ExecuteAsync(async () =>
+            {
+                await Task.Delay(10);
+                executed = true;
+            });
+
+            Assert.True(executed);
+            Assert.Equal(CircuitState.Closed, breaker.State);
+        }
     }
 }
