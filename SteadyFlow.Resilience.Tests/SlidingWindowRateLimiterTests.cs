@@ -54,5 +54,19 @@ namespace SteadyFlow.Resilience.Tests
 
             Assert.True(elapsed < TimeSpan.FromMilliseconds(50)); // should not block
         }
+
+        [Fact]
+        public void Constructor_ShouldThrow_On_Invalid_MaxRequests()
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                new SlidingWindowRateLimiter(maxRequests: 0, window: TimeSpan.FromSeconds(1)));
+        }
+
+        [Fact]
+        public void Constructor_ShouldThrow_On_Invalid_Window()
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                new SlidingWindowRateLimiter(maxRequests: 1, window: TimeSpan.Zero));
+        }
     }
 }

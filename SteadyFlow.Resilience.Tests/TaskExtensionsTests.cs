@@ -146,5 +146,44 @@ namespace SteadyFlow.Resilience.Tests
             Assert.True(elapsed >= TimeSpan.FromMilliseconds(150));
             Assert.True(executed);
         }
+
+        [Fact]
+        public async Task WithCircuitBreakerAsync_FuncTaskT_Success()
+        {
+            var breaker = new CircuitBreakerPolicy(failureThreshold: 2, openDuration: TimeSpan.FromMilliseconds(200));
+
+            Func<Task<int>> action = async () =>
+            {
+                await Task.Delay(5);
+                return 123;
+            };
+
+            var pipeline = action.WithCircuitBreakerAsync(breaker);
+            var result = await pipeline();
+
+            Assert.Equal(123, result);
+            Assert.Equal(CircuitState.Closed, breaker.State);
+        }
+
+        [Fact]
+        public async Task WithCircuitBreakerAsync_FuncTaskT_FailureOpensBreaker()
+        {
+            var breaker = new CircuitBreakerPolicy(failureThreshold: 1, openDuration: TimeSpan.FromMilliseconds(200));
+            int attempts = 0;
+
+            Func<Task<int>> action = () =>
+            {
+                attempts++;
+                throw new Exception("always fails");
+            };
+
+            var pipeline = action.WithCircuitBreakerAsync(breaker);
+
+            await Assert.ThrowsAsync<Exception>(() => pipeline());
+            await Assert.ThrowsAsync<CircuitBreakerOpenException>(() => pipeline());
+
+            Assert.Equal(CircuitState.Open, breaker.State);
+            Assert.Equal(1, attempts);
+        }
     }
 }
