@@ -1,13 +1,12 @@
+
 <p align="center">
-  <img src="assets/steadyflow_logo_banner.png" alt="SteadyFlow Logo" width="600"/>
+  <img src="assets/steadyflow_logo_banner.png" alt="SteadyFlow Logo" width="700"/>
 </p>
-
-
 
 # SteadyFlow.Resilience
 
 ✨ Lightweight resilience toolkit for .NET  
-Retry policies · Circuit Breaker · Rate limiting (Token Bucket & Sliding Window) · Batch processing · ASP.NET Core Middleware  
+Retry policies · Circuit Breaker · Rate limiting (Token Bucket & Sliding Window) · Batch processing · ASP.NET Core Middleware · Metrics & Observability
 
 [![.NET Build, Test & Publish](https://github.com/AndrewClements84/SteadyFlow.Resilience/actions/workflows/dotnet.yml/badge.svg?branch=master)](https://github.com/AndrewClements84/SteadyFlow.Resilience/actions/workflows/dotnet.yml) 
 [![codecov](https://codecov.io/gh/AndrewClements84/SteadyFlow.Resilience/branch/master/graph/badge.svg)](https://codecov.io/gh/AndrewClements84/SteadyFlow.Resilience)
@@ -27,7 +26,8 @@ Retry policies · Circuit Breaker · Rate limiting (Token Bucket & Sliding Windo
   - Sliding Window algorithm for API-style quotas  
 - **Batch Processing** – collect items into timed or size-based batches  
 - **ASP.NET Core Middleware** – plug resilience directly into your web app pipeline  
-- **Fluent Chaining** – build resilience pipelines naturally with `.WithRetryAsync().WithCircuitBreakerAsync().WithSlidingWindowAsync().WithTokenBucketAsync()`  
+- **Metrics & Observability Hooks** – pluggable observers for retries, breaker state, rate limiting, and batch flushes (`IMetricsObserver`, `LoggingMetricsObserver`)  
+- **Fluent Chaining** – build pipelines with `.WithTokenBucketAsync().WithSlidingWindowAsync().WithRetryAsync().WithCircuitBreakerAsync()`  
 - **Async-first** – designed for modern .NET apps  
 - **Lightweight** – zero external dependencies  
 - **100% Test Coverage** – verified with xUnit + Codecov  
@@ -35,8 +35,6 @@ Retry policies · Circuit Breaker · Rate limiting (Token Bucket & Sliding Windo
 ---
 
 ## 📦 Installation
-
-Once published to NuGet:
 
 ```bash
 dotnet add package SteadyFlow.Resilience
@@ -68,45 +66,6 @@ Console.WriteLine(result);
 
 ---
 
-### ⏳ Token Bucket Rate Limiting
-
-```csharp
-using SteadyFlow.Resilience.RateLimiting;
-
-var limiter = new TokenBucketRateLimiter(capacity: 5, refillRatePerSecond: 2);
-
-for (int i = 0; i < 10; i++)
-{
-    await limiter.WaitForAvailabilityAsync();
-    Console.WriteLine($"Request {i} sent at {DateTime.Now:HH:mm:ss.fff}");
-}
-```
-
----
-
-### 📦 Batch Processing
-
-```csharp
-using SteadyFlow.Resilience.Policies;
-
-var batcher = new BatchProcessor<int>(
-    batchSize: 3,
-    interval: TimeSpan.FromSeconds(5),
-    async batch =>
-    {
-        Console.WriteLine($"Processing batch: {string.Join(", ", batch)}");
-        await Task.CompletedTask;
-    });
-
-for (int i = 0; i < 10; i++)
-{
-    batcher.Add(i);
-    await Task.Delay(500);
-}
-```
-
----
-
 ### ⚡ Circuit Breaker
 
 ```csharp
@@ -118,13 +77,27 @@ Func<Task> riskyAction = async () =>
 {
     if (new Random().Next(3) == 0)
         throw new Exception("Boom!");
-    Console.WriteLine("Success");
     await Task.CompletedTask;
 };
 
 var pipeline = riskyAction.WithCircuitBreakerAsync(breaker);
-
 await pipeline(); // executes under breaker control
+```
+
+---
+
+### ⏳ Token Bucket Rate Limiting
+
+```csharp
+using SteadyFlow.Resilience.RateLimiting;
+
+var limiter = new TokenBucketRateLimiter(capacity: 5, refillRatePerSecond: 2);
+
+for (int i = 0; i < 10; i++)
+{
+    await limiter.WaitForAvailabilityAsync();
+    Console.WriteLine($"Request {i} at {DateTime.Now:HH:mm:ss.fff}");
+}
 ```
 
 ---
@@ -145,7 +118,7 @@ for (int i = 0; i < 6; i++)
 
 ---
 
-### 🔗 Fluent Integration Example (Retry + CircuitBreaker + TokenBucket)
+### 🔗 Fluent Integration Example (TokenBucket + Retry + CircuitBreaker)
 
 ```csharp
 using SteadyFlow.Resilience.Extensions;
@@ -161,8 +134,7 @@ Func<Task> action = async () =>
 {
     if (new Random().Next(2) == 0)
         throw new Exception("Simulated transient failure");
-
-    Console.WriteLine("Processed successfully");
+    await Task.CompletedTask;
 };
 
 var pipeline = action
@@ -175,6 +147,30 @@ await pipeline();
 
 ---
 
+### 📈 Metrics & Observability (optional)
+
+```csharp
+using Microsoft.Extensions.Logging;
+using SteadyFlow.Resilience.Metrics;
+using SteadyFlow.Resilience.Retry;
+
+ILoggerFactory loggerFactory = LoggerFactory.Create(b => b.AddConsole());
+var logger = loggerFactory.CreateLogger("resilience");
+var observer = new LoggingMetricsObserver(logger);
+
+// Pass observer when constructing policies
+var retry = new RetryPolicy(maxRetries: 2, initialDelayMs: 50, observer: observer);
+```
+
+Observer hooks:
+- `OnRetry(int attempt, Exception ex)`
+- `OnCircuitOpened()` / `OnCircuitClosed()` / `OnCircuitHalfOpen()`
+- `OnRateLimited(string limiterType)`
+- `OnBatchProcessed(int itemCount)`
+- `OnEvent(string policy, string message)`
+
+---
+
 ### 🌐 ASP.NET Core Middleware
 
 ```csharp
@@ -182,16 +178,15 @@ public void Configure(IApplicationBuilder app, IWebHostEnvironment env)
 {
     app.UseResiliencePipeline(options =>
     {
+        // Pass policies; you may construct them with an observer if you like
         options.Retry = new RetryPolicy(maxRetries: 3);
         options.CircuitBreaker = new CircuitBreakerPolicy(failureThreshold: 5, openDuration: TimeSpan.FromSeconds(30));
         options.SlidingWindowLimiter = new SlidingWindowRateLimiter(maxRequests: 100, window: TimeSpan.FromMinutes(1));
+        // or: options.TokenBucketLimiter = new TokenBucketRateLimiter(capacity: 5, refillRatePerSecond: 2);
     });
 
     app.UseRouting();
-    app.UseEndpoints(endpoints =>
-    {
-        endpoints.MapControllers();
-    });
+    app.UseEndpoints(endpoints => { endpoints.MapControllers(); });
 }
 ```
 
@@ -205,8 +200,9 @@ The project includes a full **xUnit test suite**:
 - ✅ Unit tests for ResiliencePipeline and Middleware  
 - ✅ Integration tests combining multiple policies  
 - ✅ Middleware integration tests (Retry, CircuitBreaker, TokenBucket, SlidingWindow)  
-- ✅ CI/CD workflow runs all tests on every commit (via GitHub Actions + Codecov)  
-- ✅ **100% code coverage enforced**  
+- ✅ **Metrics hooks** covered end-to-end with `IMetricsObserver` and `LoggingMetricsObserver`  
+- ✅ CI/CD runs all tests on every commit (GitHub Actions + Codecov)  
+- ✅ **100% code coverage**  
 
 Run locally:
 
@@ -221,7 +217,7 @@ dotnet test
 - [x] Add Circuit Breaker policy  
 - [x] Support sliding window rate limiter  
 - [x] ASP.NET middleware integration  
-- [ ] Metrics & observability hooks  
+- [x] Metrics & observability hooks  
 - [ ] Configurable backoff strategies (jitter, linear, Fibonacci)  
 
 ---
@@ -239,8 +235,7 @@ Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for det
 
 ## ⭐ Support
 
-If you find **SteadyFlow.Resilience** useful, please consider giving it a star on
-GitHub — it helps others discover the project and shows your support.
+If you find **SteadyFlow.Resilience** useful, please consider giving it a star on GitHub — it helps others discover the project and shows your support.
 
 ---
 
