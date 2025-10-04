@@ -19,11 +19,11 @@ The roadmap is not fixed and may evolve based on feedback, contributions, and us
 
 ## 🎯 Short-Term Goals (v0.2.x)
 
-- [ ] Add **circuit breaker** policy
-- [ ] Sliding window & leaky bucket rate limiters
-- [ ] Configurable retry strategies (jitter, linear, Fibonacci backoff)
-- [ ] Async cancellation support in all policies
-- [ ] Improved logging hooks for retries, rate limiting, and batches
+- [x] Add **circuit breaker** policy
+- [x] Sliding window & leaky bucket rate limiters
+- [x] Configurable retry strategies (jitter, linear, Fibonacci backoff)
+- [x] Async cancellation support in all policies
+- [x] Improved logging hooks for retries, rate limiting, and batches
 
 ---
 
