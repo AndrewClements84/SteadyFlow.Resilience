@@ -52,5 +52,25 @@ namespace SteadyFlow.Resilience.Tests
             Assert.Contains(observer.Events, e => e.StartsWith("RateLimited:SlidingWindow"));
             Assert.True(elapsed.TotalMilliseconds >= 100);
         }
+
+        [Fact]
+        public void Constructor_Should_Throw_When_MaxRequests_IsZeroOrNegative()
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                new SlidingWindowRateLimiter(maxRequests: 0, window: TimeSpan.FromSeconds(1)));
+
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                new SlidingWindowRateLimiter(maxRequests: -3, window: TimeSpan.FromSeconds(1)));
+        }
+
+        [Fact]
+        public void Constructor_Should_Throw_When_Window_IsZeroOrNegative()
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                new SlidingWindowRateLimiter(maxRequests: 2, window: TimeSpan.Zero));
+
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                new SlidingWindowRateLimiter(maxRequests: 2, window: TimeSpan.FromMilliseconds(-50)));
+        }
     }
 }

@@ -75,5 +75,47 @@ namespace SteadyFlow.Resilience.Tests
 
             Assert.Contains(observer.Events, e => e.StartsWith("BatchProcessed:"));
         }
+
+        [Fact]
+        public void Constructor_Should_Throw_When_BatchSize_IsZeroOrNegative()
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                new BatchProcessor<int>(
+                    batchSize: 0,
+                    interval: TimeSpan.FromMilliseconds(100),
+                    async batch => await Task.CompletedTask));
+
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                new BatchProcessor<int>(
+                    batchSize: -5,
+                    interval: TimeSpan.FromMilliseconds(100),
+                    async batch => await Task.CompletedTask));
+        }
+
+        [Fact]
+        public void Constructor_Should_Throw_When_Interval_IsZeroOrNegative()
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                new BatchProcessor<int>(
+                    batchSize: 5,
+                    interval: TimeSpan.Zero,
+                    async batch => await Task.CompletedTask));
+
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                new BatchProcessor<int>(
+                    batchSize: 5,
+                    interval: TimeSpan.FromMilliseconds(-1),
+                    async batch => await Task.CompletedTask));
+        }
+
+        [Fact]
+        public void Constructor_Should_Throw_When_Processor_IsNull()
+        {
+            Assert.Throws<ArgumentNullException>(() =>
+                new BatchProcessor<int>(
+                    batchSize: 5,
+                    interval: TimeSpan.FromMilliseconds(100),
+                    processor: null));
+        }
     }
 }

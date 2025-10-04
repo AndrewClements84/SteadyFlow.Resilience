@@ -82,5 +82,25 @@ namespace SteadyFlow.Resilience.Tests
             Assert.Contains("CircuitHalfOpen", observer.Events);
             Assert.Contains("CircuitClosed", observer.Events);
         }
+
+        [Fact]
+        public void Constructor_Should_Throw_When_FailureThreshold_IsZeroOrNegative()
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                new CircuitBreakerPolicy(failureThreshold: 0, openDuration: TimeSpan.FromSeconds(1)));
+
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                new CircuitBreakerPolicy(failureThreshold: -5, openDuration: TimeSpan.FromSeconds(1)));
+        }
+
+        [Fact]
+        public void Constructor_Should_Throw_When_OpenDuration_IsZeroOrNegative()
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                new CircuitBreakerPolicy(failureThreshold: 2, openDuration: TimeSpan.Zero));
+
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                new CircuitBreakerPolicy(failureThreshold: 2, openDuration: TimeSpan.FromMilliseconds(-1)));
+        }
     }
 }

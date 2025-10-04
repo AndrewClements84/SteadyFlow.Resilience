@@ -3,17 +3,26 @@ using System;
 
 namespace SteadyFlow.Resilience.Metrics
 {
-    internal class LoggingMetricsObserver : IMetricsObserver
+    public class LoggingMetricsObserver : IMetricsObserver
     {
         private readonly ILogger _logger;
-        public LoggingMetricsObserver(ILogger logger) => _logger = logger;
+
+        public LoggingMetricsObserver(ILogger logger)
+        {
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        }
 
         public void OnRetry(int attempt, Exception ex) =>
             _logger.LogWarning(ex, "[Retry] Attempt {Attempt} failed.", attempt);
 
-        public void OnCircuitOpened() => _logger.LogError("[CircuitBreaker] Circuit opened.");
-        public void OnCircuitClosed() => _logger.LogInformation("[CircuitBreaker] Circuit closed.");
-        public void OnCircuitHalfOpen() => _logger.LogInformation("[CircuitBreaker] Circuit half-open.");
+        public void OnCircuitOpened() =>
+            _logger.LogError("[CircuitBreaker] Circuit opened.");
+
+        public void OnCircuitClosed() =>
+            _logger.LogInformation("[CircuitBreaker] Circuit closed.");
+
+        public void OnCircuitHalfOpen() =>
+            _logger.LogInformation("[CircuitBreaker] Circuit half-open.");
 
         public void OnRateLimited(string limiterType) =>
             _logger.LogWarning("[RateLimiter] {LimiterType} limited request.", limiterType);

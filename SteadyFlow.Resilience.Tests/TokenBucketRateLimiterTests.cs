@@ -51,5 +51,25 @@ namespace SteadyFlow.Resilience.Tests
             Assert.Contains(observer.Events, e => e.StartsWith("RateLimited:TokenBucket"));
             Assert.True(elapsed.TotalMilliseconds >= 100); // waited at least a tick
         }
+
+        [Fact]
+        public void Constructor_Should_Throw_When_Capacity_IsZeroOrNegative()
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                new TokenBucketRateLimiter(capacity: 0, refillRatePerSecond: 1));
+
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                new TokenBucketRateLimiter(capacity: -5, refillRatePerSecond: 1));
+        }
+
+        [Fact]
+        public void Constructor_Should_Throw_When_RefillRatePerSecond_IsZeroOrNegative()
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                new TokenBucketRateLimiter(capacity: 5, refillRatePerSecond: 0));
+
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                new TokenBucketRateLimiter(capacity: 5, refillRatePerSecond: -2));
+        }
     }
 }
