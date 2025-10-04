@@ -2,6 +2,7 @@
 using SteadyFlow.Resilience.Policies;
 using SteadyFlow.Resilience.RateLimiting;
 using SteadyFlow.Resilience.Retry;
+using SteadyFlow.Resilience.Tests.Helpers;
 
 namespace SteadyFlow.Resilience.Tests
 {
@@ -10,8 +11,9 @@ namespace SteadyFlow.Resilience.Tests
         [Fact]
         public async Task Integration_Retry_RateLimit_Batching_Baseline()
         {
-            var limiter = new TokenBucketRateLimiter(capacity: 3, refillRatePerSecond: 2);
-            var retry = new RetryPolicy(maxRetries: 3, initialDelayMs: 50);
+            var observer = new FakeObserver();
+            var limiter = new TokenBucketRateLimiter(capacity: 3, refillRatePerSecond: 2, observer: observer);
+            var retry = new RetryPolicy(maxRetries: 3, initialDelayMs: 50, observer: observer);
             var processedItems = new List<int>();
 
             var batcher = new BatchProcessor<int>(
@@ -21,39 +23,111 @@ namespace SteadyFlow.Resilience.Tests
                 {
                     processedItems.AddRange(batch);
                     await Task.CompletedTask;
-                });
+                },
+                observer: observer);
 
-            var attemptMap = new Dictionary<int, int>();
+            var results = new List<string>();
             var tasks = new List<Task>();
+            var attemptMap = new Dictionary<int, int>();
 
             for (int i = 1; i <= 5; i++)
             {
-                int index = i;
+                var index = i;
                 attemptMap[index] = 0;
 
-                Func<Task> action = async () =>
+                tasks.Add(Task.Run(async () =>
                 {
-                    await limiter.WaitForAvailabilityAsync();
-                    attemptMap[index]++;
-                    if (index % 2 == 0 && attemptMap[index] == 1)
-                        throw new Exception("Transient failure");
-                    batcher.Add(index);
-                };
+                    Func<Task> action = async () =>
+                    {
+                        await limiter.WaitForAvailabilityAsync();
+                        attemptMap[index]++;
 
-                var pipeline = action.WithRetryAsync(retry);
-                tasks.Add(pipeline());
+                        if (index % 2 == 0 && attemptMap[index] == 1)
+                            throw new Exception("Simulated transient failure");
+
+                        batcher.Add(index);
+                        results.Add($"Processed {index}");
+                    };
+
+                    var pipeline = action.WithRetryAsync(retry);
+                    await pipeline();
+                }));
             }
 
             await Task.WhenAll(tasks);
             await Task.Delay(300);
 
             Assert.Equal(5, processedItems.Count);
+            foreach (var i in new[] { 1, 2, 3, 4, 5 })
+                Assert.Contains(i, processedItems);
+
+            foreach (var r in results)
+                Assert.StartsWith("Processed", r);
+        }
+
+        [Fact]
+        public async Task Integration_Retry_CircuitBreaker_RateLimit_WorkTogether()
+        {
+            var observer = new FakeObserver();
+            var retry = new RetryPolicy(maxRetries: 2, initialDelayMs: 50, observer: observer);
+            var breaker = new CircuitBreakerPolicy(failureThreshold: 2, openDuration: TimeSpan.FromMilliseconds(500), observer: observer);
+            var limiter = new TokenBucketRateLimiter(capacity: 2, refillRatePerSecond: 1, observer: observer);
+
+            var processed = new List<int>();
+            var batcher = new BatchProcessor<int>(
+                batchSize: 2,
+                interval: TimeSpan.FromMilliseconds(200),
+                async batch =>
+                {
+                    processed.AddRange(batch);
+                    await Task.CompletedTask;
+                },
+                observer: observer);
+
+            var tasks = new List<Task>();
+            var attemptMap = new Dictionary<int, int>();
+
+            for (int i = 1; i <= 4; i++)
+            {
+                int value = i;
+                attemptMap[value] = 0;
+
+                tasks.Add(Task.Run(async () =>
+                {
+                    Func<Task> action = async () =>
+                    {
+                        await limiter.WaitForAvailabilityAsync();
+                        attemptMap[value]++;
+
+                        if (value % 2 == 0 && attemptMap[value] == 1)
+                            throw new Exception("Simulated transient failure");
+
+                        batcher.Add(value);
+                    };
+
+                    var pipeline = action
+                        .WithRetryAsync(retry)
+                        .WithCircuitBreakerAsync(breaker);
+
+                    await pipeline();
+                }));
+            }
+
+            await Task.WhenAll(tasks);
+            await Task.Delay(400);
+
+            Assert.Equal(4, processed.Count);
+            foreach (var v in new[] { 1, 2, 3, 4 })
+                Assert.Contains(v, processed);
+
+            Assert.Equal(CircuitState.Closed, breaker.State);
         }
 
         [Fact]
         public async Task Integration_CircuitBreaker_Should_Open_On_TooManyFailures()
         {
-            var breaker = new CircuitBreakerPolicy(failureThreshold: 2, openDuration: TimeSpan.FromMilliseconds(200));
+            var observer = new FakeObserver();
+            var breaker = new CircuitBreakerPolicy(failureThreshold: 2, openDuration: TimeSpan.FromMilliseconds(200), observer: observer);
             int attempts = 0;
 
             Func<Task> alwaysFailingAction = () =>
@@ -64,20 +138,21 @@ namespace SteadyFlow.Resilience.Tests
 
             var pipeline = alwaysFailingAction.WithCircuitBreakerAsync(breaker);
 
-            await Assert.ThrowsAsync<Exception>(() => pipeline());
-            await Assert.ThrowsAsync<Exception>(() => pipeline());
-            await Assert.ThrowsAsync<CircuitBreakerOpenException>(() => pipeline());
+            await Assert.ThrowsAsync<Exception>(async () => await pipeline());
+            await Assert.ThrowsAsync<Exception>(async () => await pipeline());
+            await Assert.ThrowsAsync<CircuitBreakerOpenException>(async () => await pipeline());
 
             Assert.Equal(CircuitState.Open, breaker.State);
             Assert.Equal(2, attempts);
         }
 
         [Fact]
-        public async Task Integration_TokenBucket_Retry_CircuitBreaker_Fluent()
+        public async Task Integration_SlidingWindow_Retry_CircuitBreaker()
         {
-            var limiter = new TokenBucketRateLimiter(capacity: 2, refillRatePerSecond: 1);
-            var retry = new RetryPolicy(maxRetries: 2, initialDelayMs: 50);
-            var breaker = new CircuitBreakerPolicy(failureThreshold: 2, openDuration: TimeSpan.FromMilliseconds(500));
+            var observer = new FakeObserver();
+            var limiter = new SlidingWindowRateLimiter(maxRequests: 2, window: TimeSpan.FromMilliseconds(300), observer: observer);
+            var retry = new RetryPolicy(maxRetries: 2, initialDelayMs: 50, observer: observer);
+            var breaker = new CircuitBreakerPolicy(failureThreshold: 2, openDuration: TimeSpan.FromMilliseconds(500), observer: observer);
 
             var processed = new List<int>();
             var attemptMap = new Dictionary<int, int>();
@@ -88,73 +163,33 @@ namespace SteadyFlow.Resilience.Tests
                 int value = i;
                 attemptMap[value] = 0;
 
-                Func<Task> action = async () =>
+                tasks.Add(Task.Run(async () =>
                 {
-                    attemptMap[value]++;
+                    Func<Task> action = async () =>
+                    {
+                        await limiter.WaitForAvailabilityAsync();
+                        attemptMap[value]++;
 
-                    // Fail once for even numbers
-                    if (value % 2 == 0 && attemptMap[value] == 1)
-                        throw new Exception("Simulated transient failure");
+                        if (value % 2 == 0 && attemptMap[value] == 1)
+                            throw new Exception("Simulated transient failure");
 
-                    processed.Add(value);
-                    await Task.CompletedTask;
-                };
+                        processed.Add(value);
+                    };
 
-                // Build fluent pipeline
-                var pipeline = action
-                    .WithTokenBucketAsync(limiter)
-                    .WithRetryAsync(retry)
-                    .WithCircuitBreakerAsync(breaker);
+                    var pipeline = action
+                        .WithRetryAsync(retry)
+                        .WithCircuitBreakerAsync(breaker);
 
-                tasks.Add(pipeline());
+                    await pipeline();
+                }));
             }
 
             await Task.WhenAll(tasks);
 
-            // Assert all values processed
             Assert.Equal(4, processed.Count);
             foreach (var v in new[] { 1, 2, 3, 4 })
                 Assert.Contains(v, processed);
 
-            // Breaker should still be closed
-            Assert.Equal(CircuitState.Closed, breaker.State);
-        }
-
-        [Fact]
-        public async Task Integration_SlidingWindow_Retry_CircuitBreaker_Fluent()
-        {
-            var limiter = new SlidingWindowRateLimiter(maxRequests: 2, window: TimeSpan.FromMilliseconds(300));
-            var retry = new RetryPolicy(maxRetries: 2, initialDelayMs: 50);
-            var breaker = new CircuitBreakerPolicy(failureThreshold: 2, openDuration: TimeSpan.FromMilliseconds(500));
-
-            var processed = new List<int>();
-            var attemptMap = new Dictionary<int, int>();
-            var tasks = new List<Task>();
-
-            for (int i = 1; i <= 4; i++)
-            {
-                int value = i;
-                attemptMap[value] = 0;
-
-                Func<Task> action = async () =>
-                {
-                    attemptMap[value]++;
-                    if (value % 2 == 0 && attemptMap[value] == 1)
-                        throw new Exception("Transient failure");
-                    processed.Add(value);
-                };
-
-                var pipeline = action
-                    .WithSlidingWindowAsync(limiter)
-                    .WithRetryAsync(retry)
-                    .WithCircuitBreakerAsync(breaker);
-
-                tasks.Add(pipeline());
-            }
-
-            await Task.WhenAll(tasks);
-
-            Assert.Equal(4, processed.Count);
             Assert.Equal(CircuitState.Closed, breaker.State);
         }
     }

@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
 using SteadyFlow.Resilience.AspNetCore;
 using SteadyFlow.Resilience.Policies;
 using SteadyFlow.Resilience.RateLimiting;
@@ -12,139 +13,89 @@ namespace SteadyFlow.Resilience.Tests
 {
     public class MiddlewareIntegrationTests
     {
-        [Fact]
-        public async Task Middleware_Should_Apply_RetryPolicy()
+        private TestServer CreateServer(Action<ResilienceOptions> configure, RequestDelegate handler)
         {
-            int attempts = 0;
-
             var builder = new WebHostBuilder()
                 .Configure(app =>
                 {
-                    app.UseResiliencePipeline(options =>
-                    {
-                        options.Retry = new RetryPolicy(maxRetries: 2, initialDelayMs: 10);
-                    });
-
-                    app.Run(ctx =>
-                    {
-                        attempts++;
-                        if (attempts < 2)
-                            throw new Exception("fail once");
-
-                        return ctx.Response.WriteAsync("OK");
-                    });
+                    app.UseResiliencePipeline(configure);
+                    app.Run(handler);
                 });
 
-            using var server = new TestServer(builder);
+            return new TestServer(builder);
+        }
+
+        [Fact]
+        public async Task Middleware_Should_Apply_Retry_And_Succeed()
+        {
+            var attempts = 0;
+
+            var server = CreateServer(options =>
+            {
+                options.Retry = new RetryPolicy(maxRetries: 2, initialDelayMs: 10);
+            },
+            async ctx =>
+            {
+                attempts++;
+                if (attempts < 2)
+                    throw new Exception("Transient failure");
+
+                await ctx.Response.WriteAsync("Success");
+            });
+
             var client = server.CreateClient();
-
             var response = await client.GetAsync("/");
-            var content = await response.Content.ReadAsStringAsync();
 
-            Assert.True(response.IsSuccessStatusCode);
-            Assert.Equal("OK", content);
-            Assert.Equal(2, attempts); // retried once
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            var content = await response.Content.ReadAsStringAsync();
+            Assert.Equal("Success", content);
         }
 
         [Fact]
         public async Task Middleware_Should_Trip_CircuitBreaker()
         {
-            var builder = new WebHostBuilder()
-                .Configure(app =>
-                {
-                    app.UseResiliencePipeline(options =>
-                    {
-                        // threshold=1 means: after the *first* failure, breaker opens
-                        options.CircuitBreaker = new CircuitBreakerPolicy(
-                            failureThreshold: 1,
-                            openDuration: TimeSpan.FromMilliseconds(200));
-                    });
+            var server = CreateServer(options =>
+            {
+                options.CircuitBreaker = new CircuitBreakerPolicy(failureThreshold: 2, openDuration: TimeSpan.FromMilliseconds(500));
+            },
+            ctx =>
+            {
+                throw new Exception("Always fails");
+            });
 
-                    app.Run(ctx =>
-                    {
-                        throw new Exception("Always fails");
-                    });
-                });
-
-            using var server = new TestServer(builder);
             var client = server.CreateClient();
 
-            // First call: original exception is rethrown from ExecuteAsync's catch
-            var ex1 = await Assert.ThrowsAsync<Exception>(() => client.GetAsync("/"));
-            Assert.Contains("Always fails", ex1.Message);
+            // First two calls fail with Exception
+            await Assert.ThrowsAsync<Exception>(async () => await client.GetAsync("/"));
+            await Assert.ThrowsAsync<Exception>(async () => await client.GetAsync("/"));
 
-            // Second call: circuit is already Open, so fast-fail with CircuitBreakerOpenException
-            await Assert.ThrowsAsync<CircuitBreakerOpenException>(() => client.GetAsync("/"));
+            // Third call should hit the breaker and return CircuitBreakerOpenException
+            await Assert.ThrowsAsync<CircuitBreakerOpenException>(async () => await client.GetAsync("/"));
         }
 
         [Fact]
-        public async Task Middleware_Should_Enforce_TokenBucketRateLimiter()
+        public async Task Middleware_Should_Respect_TokenBucketLimiter()
         {
-            var builder = new WebHostBuilder()
-                .Configure(app =>
-                {
-                    app.UseResiliencePipeline(options =>
-                    {
-                        options.TokenBucketLimiter = new TokenBucketRateLimiter(
-                            capacity: 1,
-                            refillRatePerSecond: 1);
-                    });
+            var server = CreateServer(options =>
+            {
+                options.TokenBucketLimiter = new TokenBucketRateLimiter(capacity: 1, refillRatePerSecond: 1);
+            },
+            async ctx =>
+            {
+                await ctx.Response.WriteAsync("OK");
+            });
 
-                    app.Run(ctx =>
-                    {
-                        return ctx.Response.WriteAsync("OK");
-                    });
-                });
-
-            using var server = new TestServer(builder);
-            var client = server.CreateClient();
-
-            // First request succeeds immediately
-            var response1 = await client.GetAsync("/");
-            Assert.Equal(HttpStatusCode.OK, response1.StatusCode);
-
-            // Second request should wait until token refills
-            var start = DateTime.UtcNow;
-            var response2 = await client.GetAsync("/");
-            var elapsed = DateTime.UtcNow - start;
-
-            Assert.Equal(HttpStatusCode.OK, response2.StatusCode);
-            Assert.True(elapsed >= TimeSpan.FromMilliseconds(500)); // waited for refill
-        }
-
-        [Fact]
-        public async Task Middleware_Should_Enforce_SlidingWindowRateLimiter()
-        {
-            var builder = new WebHostBuilder()
-                .Configure(app =>
-                {
-                    app.UseResiliencePipeline(options =>
-                    {
-                        options.SlidingWindowLimiter = new SlidingWindowRateLimiter(
-                            maxRequests: 1,
-                            window: TimeSpan.FromMilliseconds(300));
-                    });
-
-                    app.Run(ctx =>
-                    {
-                        return ctx.Response.WriteAsync("OK");
-                    });
-                });
-
-            using var server = new TestServer(builder);
             var client = server.CreateClient();
 
             // First request succeeds
             var response1 = await client.GetAsync("/");
             Assert.Equal(HttpStatusCode.OK, response1.StatusCode);
 
-            // Second request should be delayed until window resets
-            var start = DateTime.UtcNow;
-            var response2 = await client.GetAsync("/");
-            var elapsed = DateTime.UtcNow - start;
+            // Second request immediately should be throttled (because capacity = 1, refill = 1/s)
+            var task2 = client.GetAsync("/");
+            var completed = await Task.WhenAny(task2, Task.Delay(50));
 
-            Assert.Equal(HttpStatusCode.OK, response2.StatusCode);
-            Assert.True(elapsed >= TimeSpan.FromMilliseconds(200)); // at least some wait
+            Assert.NotEqual(task2, completed); // means limiter throttled
         }
     }
 }

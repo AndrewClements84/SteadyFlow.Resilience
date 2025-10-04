@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Threading.Tasks;
+using SteadyFlow.Resilience.Metrics;
 
 namespace SteadyFlow.Resilience.Policies
 {
@@ -8,15 +9,20 @@ namespace SteadyFlow.Resilience.Policies
         private readonly int _failureThreshold;
         private readonly TimeSpan _openDuration;
         private readonly object _lock = new object();
+        private readonly IMetricsObserver _observer;
 
         private int _failureCount;
         private DateTime _lastFailureTime;
         private CircuitState _state = CircuitState.Closed;
 
-        public CircuitBreakerPolicy(int failureThreshold, TimeSpan openDuration)
+        public CircuitBreakerPolicy(int failureThreshold, TimeSpan openDuration, IMetricsObserver observer = null)
         {
+            if (failureThreshold <= 0) throw new ArgumentOutOfRangeException(nameof(failureThreshold));
+            if (openDuration.TotalMilliseconds <= 0) throw new ArgumentOutOfRangeException(nameof(openDuration));
+
             _failureThreshold = failureThreshold;
             _openDuration = openDuration;
+            _observer = observer;
         }
 
         public async Task<T> ExecuteAsync<T>(Func<Task<T>> action)
@@ -28,9 +34,11 @@ namespace SteadyFlow.Resilience.Policies
                     if (DateTime.UtcNow - _lastFailureTime > _openDuration)
                     {
                         _state = CircuitState.HalfOpen;
+                        _observer?.OnCircuitHalfOpen();
                     }
                     else
                     {
+                        _observer?.OnEvent("CircuitBreaker", "Request blocked while circuit is open.");
                         throw new CircuitBreakerOpenException("Circuit is open");
                     }
                 }
@@ -43,13 +51,17 @@ namespace SteadyFlow.Resilience.Policies
                 lock (_lock)
                 {
                     _failureCount = 0;
+
                     if (_state == CircuitState.HalfOpen)
+                    {
                         _state = CircuitState.Closed;
+                        _observer?.OnCircuitClosed();
+                    }
                 }
 
                 return result;
             }
-            catch
+            catch (Exception ex)
             {
                 lock (_lock)
                 {
@@ -57,7 +69,10 @@ namespace SteadyFlow.Resilience.Policies
                     _lastFailureTime = DateTime.UtcNow;
 
                     if (_failureCount >= _failureThreshold)
+                    {
                         _state = CircuitState.Open;
+                        _observer?.OnCircuitOpened();
+                    }
                 }
 
                 throw;

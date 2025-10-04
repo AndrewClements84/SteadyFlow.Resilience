@@ -1,9 +1,10 @@
-﻿using SteadyFlow.Resilience.Extensions;
+﻿using System;
+using System.Threading.Tasks;
+using SteadyFlow.Resilience.Extensions;
+using SteadyFlow.Resilience.Metrics;
 using SteadyFlow.Resilience.Policies;
 using SteadyFlow.Resilience.RateLimiting;
 using SteadyFlow.Resilience.Retry;
-using System;
-using System.Threading.Tasks;
 
 namespace SteadyFlow.Resilience.AspNetCore
 {
@@ -13,6 +14,7 @@ namespace SteadyFlow.Resilience.AspNetCore
         public CircuitBreakerPolicy CircuitBreaker { get; set; }
         public TokenBucketRateLimiter TokenBucketLimiter { get; set; }
         public SlidingWindowRateLimiter SlidingWindowLimiter { get; set; }
+        public IMetricsObserver Observer { get; set; } // NEW
     }
 
     public class ResiliencePipeline
@@ -21,8 +23,7 @@ namespace SteadyFlow.Resilience.AspNetCore
 
         public ResiliencePipeline(ResilienceOptions options)
         {
-            if (options == null) throw new ArgumentNullException(nameof(options));
-            _options = options;
+            _options = options ?? throw new ArgumentNullException(nameof(options));
         }
 
         public Func<Task> Build(Func<Task> action)

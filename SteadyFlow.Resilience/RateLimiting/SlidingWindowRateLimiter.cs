@@ -1,7 +1,8 @@
 ﻿using System;
-using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using SteadyFlow.Resilience.Metrics;
 
 namespace SteadyFlow.Resilience.RateLimiting
 {
@@ -9,45 +10,48 @@ namespace SteadyFlow.Resilience.RateLimiting
     {
         private readonly int _maxRequests;
         private readonly TimeSpan _window;
-        private readonly ConcurrentQueue<DateTime> _timestamps = new ConcurrentQueue<DateTime>();
+        private readonly Queue<DateTime> _requests = new Queue<DateTime>();
+        private readonly SemaphoreSlim _lock = new SemaphoreSlim(1, 1);
+        private readonly IMetricsObserver _observer;
 
-        private readonly SemaphoreSlim _semaphore = new SemaphoreSlim(1, 1);
-
-        public SlidingWindowRateLimiter(int maxRequests, TimeSpan window)
+        public SlidingWindowRateLimiter(int maxRequests, TimeSpan window, IMetricsObserver observer = null)
         {
             if (maxRequests <= 0) throw new ArgumentOutOfRangeException(nameof(maxRequests));
             if (window.TotalMilliseconds <= 0) throw new ArgumentOutOfRangeException(nameof(window));
 
             _maxRequests = maxRequests;
             _window = window;
+            _observer = observer;
         }
 
         public async Task WaitForAvailabilityAsync()
         {
             while (true)
             {
-                await _semaphore.WaitAsync();
+                await _lock.WaitAsync();
                 try
                 {
                     var now = DateTime.UtcNow;
 
-                    // Remove expired timestamps
-                    while (_timestamps.TryPeek(out var ts) && now - ts > _window)
-                        _timestamps.TryDequeue(out _);
+                    while (_requests.Count > 0 && now - _requests.Peek() > _window)
+                        _requests.Dequeue();
 
-                    if (_timestamps.Count < _maxRequests)
+                    if (_requests.Count < _maxRequests)
                     {
-                        _timestamps.Enqueue(now);
-                        return; // allowed
+                        _requests.Enqueue(now);
+                        return;
+                    }
+                    else
+                    {
+                        _observer?.OnRateLimited("SlidingWindow");
                     }
                 }
                 finally
                 {
-                    _semaphore.Release();
+                    _lock.Release();
                 }
 
-                // Delay before retrying
-                await Task.Delay(50);
+                await Task.Delay(100);
             }
         }
     }

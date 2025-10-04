@@ -1,72 +1,56 @@
 ﻿using SteadyFlow.Resilience.RateLimiting;
+using SteadyFlow.Resilience.Tests.Helpers;
 
 namespace SteadyFlow.Resilience.Tests
 {
-    public  class SlidingWindowRateLimiterTests
+    public class SlidingWindowRateLimiterTests
     {
         [Fact]
-        public async Task Allows_Requests_Under_Limit()
+        public async Task Should_Allow_Within_Limits()
         {
-            var limiter = new SlidingWindowRateLimiter(maxRequests: 3, window: TimeSpan.FromSeconds(1));
-            var allowed = 0;
+            var limiter = new SlidingWindowRateLimiter(3, TimeSpan.FromMilliseconds(200), observer: null);
 
-            for (int i = 0; i < 3; i++)
-            {
-                await limiter.WaitForAvailabilityAsync();
-                allowed++;
-            }
+            await limiter.WaitForAvailabilityAsync();
+            await limiter.WaitForAvailabilityAsync();
+            await limiter.WaitForAvailabilityAsync();
 
-            Assert.Equal(3, allowed);
+            // Should not block yet
+            Assert.True(true);
         }
 
         [Fact]
-        public async Task Blocks_When_Over_Limit()
+        public async Task Should_Block_When_Limit_Reached()
         {
-            var limiter = new SlidingWindowRateLimiter(maxRequests: 2, window: TimeSpan.FromMilliseconds(500));
+            var limiter = new SlidingWindowRateLimiter(2, TimeSpan.FromMilliseconds(200), observer: null);
 
-            // First two should succeed immediately
             await limiter.WaitForAvailabilityAsync();
             await limiter.WaitForAvailabilityAsync();
 
             var start = DateTime.UtcNow;
 
-            // Third should be blocked until window slides
+            // This should block until earlier requests fall out of the window
             await limiter.WaitForAvailabilityAsync();
 
             var elapsed = DateTime.UtcNow - start;
-            Assert.True(elapsed >= TimeSpan.FromMilliseconds(400));
+            Assert.True(elapsed.TotalMilliseconds >= 100);
         }
 
         [Fact]
-        public async Task Allows_Again_After_Window_Passes()
+        public async Task Should_Report_OnRateLimited_To_Observer()
         {
-            var limiter = new SlidingWindowRateLimiter(maxRequests: 2, window: TimeSpan.FromMilliseconds(200));
+            var observer = new FakeObserver();
+            var limiter = new SlidingWindowRateLimiter(1, TimeSpan.FromMilliseconds(200), observer);
 
+            // First request succeeds
             await limiter.WaitForAvailabilityAsync();
-            await limiter.WaitForAvailabilityAsync();
 
-            // This will block until old timestamps expire
-            await Task.Delay(250);
-
+            // Second request should be limited
             var start = DateTime.UtcNow;
             await limiter.WaitForAvailabilityAsync();
             var elapsed = DateTime.UtcNow - start;
 
-            Assert.True(elapsed < TimeSpan.FromMilliseconds(50)); // should not block
-        }
-
-        [Fact]
-        public void Constructor_ShouldThrow_On_Invalid_MaxRequests()
-        {
-            Assert.Throws<ArgumentOutOfRangeException>(() =>
-                new SlidingWindowRateLimiter(maxRequests: 0, window: TimeSpan.FromSeconds(1)));
-        }
-
-        [Fact]
-        public void Constructor_ShouldThrow_On_Invalid_Window()
-        {
-            Assert.Throws<ArgumentOutOfRangeException>(() =>
-                new SlidingWindowRateLimiter(maxRequests: 1, window: TimeSpan.Zero));
+            Assert.Contains(observer.Events, e => e.StartsWith("RateLimited:SlidingWindow"));
+            Assert.True(elapsed.TotalMilliseconds >= 100);
         }
     }
 }

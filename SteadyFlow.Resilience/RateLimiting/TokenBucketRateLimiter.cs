@@ -1,57 +1,66 @@
 ﻿using System;
 using System.Threading;
 using System.Threading.Tasks;
+using SteadyFlow.Resilience.Metrics;
 
 namespace SteadyFlow.Resilience.RateLimiting
 {
     public class TokenBucketRateLimiter
     {
         private readonly int _capacity;
-        private readonly int _refillRatePerSecond;
-        private int _tokens;
-        private readonly object _lock = new object();
+        private readonly double _refillRatePerSecond;
+        private double _tokens;
         private DateTime _lastRefill;
+        private readonly SemaphoreSlim _lock = new SemaphoreSlim(1, 1);
+        private readonly IMetricsObserver _observer;
 
-        public TokenBucketRateLimiter(int capacity, int refillRatePerSecond)
+        public TokenBucketRateLimiter(int capacity, double refillRatePerSecond, IMetricsObserver observer = null)
         {
+            if (capacity <= 0) throw new ArgumentOutOfRangeException(nameof(capacity));
+            if (refillRatePerSecond <= 0) throw new ArgumentOutOfRangeException(nameof(refillRatePerSecond));
+
             _capacity = capacity;
             _refillRatePerSecond = refillRatePerSecond;
             _tokens = capacity;
             _lastRefill = DateTime.UtcNow;
+            _observer = observer;
         }
 
-        public bool TryConsume(int tokens = 1)
+        public async Task WaitForAvailabilityAsync()
         {
-            lock (_lock)
+            while (true)
             {
-                Refill();
-                if (_tokens >= tokens)
+                await _lock.WaitAsync();
+                try
                 {
-                    _tokens -= tokens;
-                    return true;
-                }
-                return false;
-            }
-        }
+                    Refill();
 
-        public async Task WaitForAvailabilityAsync(int tokens = 1, CancellationToken cancellationToken = default)
-        {
-            while (!TryConsume(tokens))
-            {
-                await Task.Delay(100, cancellationToken);
+                    if (_tokens >= 1)
+                    {
+                        _tokens -= 1;
+                        return;
+                    }
+                    else
+                    {
+                        _observer?.OnRateLimited("TokenBucket");
+                    }
+                }
+                finally
+                {
+                    _lock.Release();
+                }
+
+                await Task.Delay(100);
             }
         }
 
         private void Refill()
         {
             var now = DateTime.UtcNow;
-            var secondsPassed = (now - _lastRefill).TotalSeconds;
-            var refill = (int)(secondsPassed * _refillRatePerSecond);
-            if (refill > 0)
-            {
-                _tokens = Math.Min(_capacity, _tokens + refill);
-                _lastRefill = now;
-            }
+            var elapsed = (now - _lastRefill).TotalSeconds;
+            _lastRefill = now;
+
+            _tokens = Math.Min(_capacity, _tokens + elapsed * _refillRatePerSecond);
         }
     }
 }

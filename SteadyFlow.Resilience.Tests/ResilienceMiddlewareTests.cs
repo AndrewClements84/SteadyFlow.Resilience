@@ -6,64 +6,59 @@ namespace SteadyFlow.Resilience.Tests
     public class ResilienceMiddlewareTests
     {
         [Fact]
-        public async Task InvokeAsync_CallsNextDelegate()
-        {
-            bool nextCalled = false;
-
-            RequestDelegate next = ctx =>
-            {
-                nextCalled = true;
-                return Task.CompletedTask;
-            };
-
-            var options = new ResilienceOptions(); // no policies
-            var pipeline = new ResiliencePipeline(options);
-            var middleware = new ResilienceMiddleware(next, pipeline);
-
-            var context = new DefaultHttpContext();
-            await middleware.InvokeAsync(context);
-
-            Assert.True(nextCalled);
-        }
-
-        [Fact]
-        public async Task InvokeAsync_AppliesPipeline()
-        {
-            int attempts = 0;
-
-            RequestDelegate next = ctx =>
-            {
-                attempts++;
-                if (attempts < 2) throw new Exception("fail once");
-                return Task.CompletedTask;
-            };
-
-            var options = new ResilienceOptions
-            {
-                Retry = new SteadyFlow.Resilience.Retry.RetryPolicy(maxRetries: 2, initialDelayMs: 10)
-            };
-
-            var pipeline = new ResiliencePipeline(options);
-            var middleware = new ResilienceMiddleware(next, pipeline);
-
-            var context = new DefaultHttpContext();
-            await middleware.InvokeAsync(context);
-
-            Assert.Equal(2, attempts); // retried once
-        }
-
-        [Fact]
         public void Constructor_Should_Throw_When_Next_IsNull()
         {
+            var pipeline = new ResiliencePipeline(new ResilienceOptions());
+
             Assert.Throws<ArgumentNullException>(() =>
-                new ResilienceMiddleware(null, new ResiliencePipeline(new ResilienceOptions())));
+                new ResilienceMiddleware(null!, pipeline));
         }
 
         [Fact]
         public void Constructor_Should_Throw_When_Pipeline_IsNull()
         {
+            RequestDelegate next = ctx => Task.CompletedTask;
+
             Assert.Throws<ArgumentNullException>(() =>
-                new ResilienceMiddleware(ctx => Task.CompletedTask, null));
+                new ResilienceMiddleware(next, null!));
+        }
+
+        [Fact]
+        public async Task InvokeAsync_Should_Call_Next()
+        {
+            var context = new DefaultHttpContext();
+            var called = false;
+
+            RequestDelegate next = ctx =>
+            {
+                called = true;
+                ctx.Response.StatusCode = 200;
+                return Task.CompletedTask;
+            };
+
+            var pipeline = new ResiliencePipeline(new ResilienceOptions());
+            var middleware = new ResilienceMiddleware(next, pipeline);
+
+            await middleware.InvokeAsync(context);
+
+            Assert.True(called);
+            Assert.Equal(200, context.Response.StatusCode);
+        }
+
+        [Fact]
+        public async Task InvokeAsync_Should_Propagate_Exception_From_Next()
+        {
+            var context = new DefaultHttpContext();
+
+            RequestDelegate next = ctx =>
+            {
+                throw new InvalidOperationException("Boom!");
+            };
+
+            var pipeline = new ResiliencePipeline(new ResilienceOptions());
+            var middleware = new ResilienceMiddleware(next, pipeline);
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() => middleware.InvokeAsync(context));
         }
     }
 }

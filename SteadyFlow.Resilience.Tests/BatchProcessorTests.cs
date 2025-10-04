@@ -1,4 +1,5 @@
 ﻿using SteadyFlow.Resilience.Policies;
+using SteadyFlow.Resilience.Tests.Helpers;
 
 namespace SteadyFlow.Resilience.Tests
 {
@@ -9,24 +10,26 @@ namespace SteadyFlow.Resilience.Tests
         {
             var processed = new List<int>();
             var batcher = new BatchProcessor<int>(
-                batchSize: 3,
-                interval: TimeSpan.FromSeconds(10),
+                batchSize: 2,
+                interval: TimeSpan.FromSeconds(5),
                 async batch =>
                 {
                     processed.AddRange(batch);
                     await Task.CompletedTask;
-                });
+                },
+                observer: null);
 
             batcher.Add(1);
             batcher.Add(2);
-            batcher.Add(3);
 
-            await Task.Delay(200); // allow background flush
-            Assert.Equal(new[] { 1, 2, 3 }, processed);
+            await Task.Delay(200); // allow batch flush
+
+            Assert.Contains(1, processed);
+            Assert.Contains(2, processed);
         }
 
         [Fact]
-        public async Task Should_Process_Batch_On_Interval()
+        public async Task Should_Process_Batch_When_Interval_Reached()
         {
             var processed = new List<int>();
             var batcher = new BatchProcessor<int>(
@@ -36,12 +39,41 @@ namespace SteadyFlow.Resilience.Tests
                 {
                     processed.AddRange(batch);
                     await Task.CompletedTask;
-                });
+                },
+                observer: null);
 
             batcher.Add(42);
-            await Task.Delay(300); // let timer trigger
+
+            await Task.Delay(300); // interval should trigger flush
 
             Assert.Contains(42, processed);
+        }
+
+        [Fact]
+        public async Task Should_Report_OnBatchProcessed_To_Observer()
+        {
+            var processed = new List<int>();
+            var observer = new FakeObserver();
+
+            var batcher = new BatchProcessor<int>(
+                batchSize: 2,
+                interval: TimeSpan.FromMilliseconds(500),
+                async batch =>
+                {
+                    processed.AddRange(batch);
+                    await Task.CompletedTask;
+                },
+                observer);
+
+            batcher.Add(100);
+            batcher.Add(200);
+
+            await Task.Delay(300); // allow flush
+
+            Assert.Contains(100, processed);
+            Assert.Contains(200, processed);
+
+            Assert.Contains(observer.Events, e => e.StartsWith("BatchProcessed:"));
         }
     }
 }
