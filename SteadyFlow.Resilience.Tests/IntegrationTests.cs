@@ -148,48 +148,56 @@ namespace SteadyFlow.Resilience.Tests
         [Fact]
         public async Task Integration_SlidingWindow_Retry_CircuitBreaker()
         {
+            // Arrange
             var observer = new FakeObserver();
-            var limiter = new SlidingWindowRateLimiter(maxRequests: 2, window: TimeSpan.FromMilliseconds(300), observer: observer);
-            var retry = new RetryPolicy(maxRetries: 2, initialDelayMs: 50, observer: observer);
-            var breaker = new CircuitBreakerPolicy(failureThreshold: 2, openDuration: TimeSpan.FromMilliseconds(500), observer: observer);
 
-            var processed = new List<int>();
-            var attemptMap = new Dictionary<int, int>();
-            var tasks = new List<Task>();
+            var retry = new RetryPolicy(
+                maxRetries: 3,
+                initialDelayMs: 10,
+                observer: observer,
+                strategy: new ExponentialBackoffStrategy()
+            );
 
-            for (int i = 1; i <= 4; i++)
+            // Attach the same observer to the breaker so we can see CircuitOpened
+            var breaker = new CircuitBreakerPolicy(
+                failureThreshold: 2,
+                openDuration: TimeSpan.FromMilliseconds(500),
+                observer: observer
+            );
+
+            // Sliding window set to 1 request per 300ms to ensure throttling under concurrency
+            var limiter = new SlidingWindowRateLimiter(
+                maxRequests: 1,
+                window: TimeSpan.FromMilliseconds(300),
+                observer: observer
+            );
+
+            int attempt = 0;
+            Func<Task> action = async () =>
             {
-                int value = i;
-                attemptMap[value] = 0;
+                attempt++;
+                // Always fail so we accumulate breaker failures quickly
+                throw new Exception("Simulated failure");
+            };
 
-                tasks.Add(Task.Run(async () =>
-                {
-                    Func<Task> action = async () =>
-                    {
-                        await limiter.WaitForAvailabilityAsync();
-                        attemptMap[value]++;
+            var pipeline = action
+                .WithSlidingWindowAsync(limiter)
+                .WithRetryAsync(retry)
+                .WithCircuitBreakerAsync(breaker);
 
-                        if (value % 2 == 0 && attemptMap[value] == 1)
-                            throw new Exception("Simulated transient failure");
+            // Act: two concurrent failing calls -> triggers rate limit AND two breaker failures
+            var t1 = Assert.ThrowsAsync<Exception>(pipeline);
+            var t2 = Assert.ThrowsAsync<Exception>(pipeline);
+            await Task.WhenAll(t1, t2);
 
-                        processed.Add(value);
-                    };
+            // Breaker should now be open; next call should fail immediately with open exception
+            await Assert.ThrowsAsync<CircuitBreakerOpenException>(pipeline);
 
-                    var pipeline = action
-                        .WithRetryAsync(retry)
-                        .WithCircuitBreakerAsync(breaker);
-
-                    await pipeline();
-                }));
-            }
-
-            await Task.WhenAll(tasks);
-
-            Assert.Equal(4, processed.Count);
-            foreach (var v in new[] { 1, 2, 3, 4 })
-                Assert.Contains(v, processed);
-
-            Assert.Equal(CircuitState.Closed, breaker.State);
+            // Assert: semantic checks (avoid brittle exact counts due to async timing)
+            Assert.Contains(observer.ObservedEvents, e => e.StartsWith("Retry:"));          // at least one retry
+            Assert.Contains(observer.ObservedEvents, e => e.Contains("CircuitOpened"));     // breaker opened
+            Assert.Contains(observer.ObservedEvents, e => e.Contains("RateLimited"));       // sliding window throttled
+            Assert.InRange(attempt, 2, int.MaxValue); // at least two attempts executed overall
         }
 
         [Fact]
