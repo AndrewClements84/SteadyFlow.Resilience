@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using SteadyFlow.Resilience.AspNetCore;
+using SteadyFlow.Resilience.Metrics;
 using SteadyFlow.Resilience.Policies;
 using SteadyFlow.Resilience.RateLimiting;
 using SteadyFlow.Resilience.Retry;
@@ -96,6 +97,38 @@ namespace SteadyFlow.Resilience.Tests
             var completed = await Task.WhenAny(task2, Task.Delay(50));
 
             Assert.NotEqual(task2, completed); // means limiter throttled
+        }
+
+        [Fact]
+        public async Task Middleware_Should_Report_RetryEvents()
+        {
+            // Arrange
+            var observer = new FakeObserver();
+
+            var services = new ServiceCollection();
+            services.AddSingleton<IMetricsObserver>(observer);
+            var provider = services.BuildServiceProvider();
+
+            var app = new ApplicationBuilder(provider);
+            app.UseResiliencePipeline(options =>
+            {
+                options.Retry = new RetryPolicy(maxRetries: 2, initialDelayMs: 10, observer: observer);
+            });
+
+            app.Run(async context =>
+            {
+                throw new Exception("Always fail");
+            });
+
+            var pipeline = app.Build();
+
+            var httpContext = new DefaultHttpContext();
+
+            // Act
+            await Assert.ThrowsAsync<Exception>(() => pipeline(httpContext));
+
+            // Assert
+            Assert.True(observer.ObservedEvents.Exists(e => e.StartsWith("Retry:")));
         }
     }
 }

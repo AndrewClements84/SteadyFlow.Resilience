@@ -1,5 +1,4 @@
 ﻿using SteadyFlow.Resilience.Policies;
-using SteadyFlow.Resilience.Tests.Helpers;
 
 namespace SteadyFlow.Resilience.Tests
 {
@@ -68,7 +67,7 @@ namespace SteadyFlow.Resilience.Tests
 
             // Circuit should be open
             Assert.Equal(CircuitState.Open, breaker.State);
-            Assert.Contains("CircuitOpened", observer.Events);
+            Assert.Contains("CircuitOpened", observer.ObservedEvents);
 
             // Wait for reset window
             await Task.Delay(250);
@@ -79,8 +78,8 @@ namespace SteadyFlow.Resilience.Tests
             Assert.Equal("ok", result);
             Assert.Equal(CircuitState.Closed, breaker.State);
 
-            Assert.Contains("CircuitHalfOpen", observer.Events);
-            Assert.Contains("CircuitClosed", observer.Events);
+            Assert.Contains("CircuitHalfOpen", observer.ObservedEvents);
+            Assert.Contains("CircuitClosed", observer.ObservedEvents);
         }
 
         [Fact]

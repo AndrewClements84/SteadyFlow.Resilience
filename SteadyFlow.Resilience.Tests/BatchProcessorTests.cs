@@ -1,5 +1,4 @@
 ﻿using SteadyFlow.Resilience.Policies;
-using SteadyFlow.Resilience.Tests.Helpers;
 
 namespace SteadyFlow.Resilience.Tests
 {
@@ -73,7 +72,7 @@ namespace SteadyFlow.Resilience.Tests
             Assert.Contains(100, processed);
             Assert.Contains(200, processed);
 
-            Assert.Contains(observer.Events, e => e.StartsWith("BatchProcessed:"));
+            Assert.Contains(observer.ObservedEvents, e => e.StartsWith("BatchProcessed:"));
         }
 
         [Fact]

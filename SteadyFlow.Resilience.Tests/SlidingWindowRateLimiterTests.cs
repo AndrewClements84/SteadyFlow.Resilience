@@ -1,5 +1,4 @@
 ﻿using SteadyFlow.Resilience.RateLimiting;
-using SteadyFlow.Resilience.Tests.Helpers;
 
 namespace SteadyFlow.Resilience.Tests
 {
@@ -49,7 +48,7 @@ namespace SteadyFlow.Resilience.Tests
             await limiter.WaitForAvailabilityAsync();
             var elapsed = DateTime.UtcNow - start;
 
-            Assert.Contains(observer.Events, e => e.StartsWith("RateLimited:SlidingWindow"));
+            Assert.Contains(observer.ObservedEvents, e => e.StartsWith("RateLimited:SlidingWindow"));
             Assert.True(elapsed.TotalMilliseconds >= 100);
         }
 

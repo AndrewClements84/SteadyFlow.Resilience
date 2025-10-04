@@ -1,6 +1,6 @@
-﻿using System;
+﻿using SteadyFlow.Resilience.Metrics;
+using System;
 using System.Threading.Tasks;
-using SteadyFlow.Resilience.Metrics;
 
 namespace SteadyFlow.Resilience.Policies
 {
@@ -38,7 +38,7 @@ namespace SteadyFlow.Resilience.Policies
                     }
                     else
                     {
-                        _observer?.OnEvent("CircuitBreaker", "Request blocked while circuit is open.");
+                        _observer?.OnCircuitOpened();
                         throw new CircuitBreakerOpenException("Circuit is open");
                     }
                 }
@@ -92,7 +92,8 @@ namespace SteadyFlow.Resilience.Policies
         {
             get
             {
-                lock (_lock) return _state;
+                lock (_lock)
+                    return _state;
             }
         }
     }

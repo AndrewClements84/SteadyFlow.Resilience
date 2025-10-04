@@ -2,7 +2,6 @@
 using SteadyFlow.Resilience.Policies;
 using SteadyFlow.Resilience.RateLimiting;
 using SteadyFlow.Resilience.Retry;
-using SteadyFlow.Resilience.Tests.Helpers;
 
 namespace SteadyFlow.Resilience.Tests
 {
@@ -65,36 +64,64 @@ namespace SteadyFlow.Resilience.Tests
             await wrapped(); // second call should be rate limited, but still executes eventually
 
             Assert.Equal(2, calls);
-            Assert.Contains("RateLimited:SlidingWindow", observer.Events);
+            Assert.Contains("RateLimited:SlidingWindow", observer.ObservedEvents);
         }
 
         [Fact]
         public async Task Build_Should_Apply_Retry_And_CircuitBreaker_When_Configured()
         {
             var observer = new FakeObserver();
+
             var options = new ResilienceOptions
             {
                 Retry = new RetryPolicy(maxRetries: 1, initialDelayMs: 10, observer: observer),
-                CircuitBreaker = new CircuitBreakerPolicy(failureThreshold: 1, openDuration: TimeSpan.FromMilliseconds(100), observer: observer)
+                CircuitBreaker = new CircuitBreakerPolicy(
+                    failureThreshold: 1,
+                    openDuration: TimeSpan.FromMilliseconds(50),
+                    observer: observer) 
             };
 
             var pipeline = new ResiliencePipeline(options);
 
-            int attempts = 0;
-            Func<Task> action = () =>
+            Func<Task> action = () => throw new Exception("Fail");
+            var built = pipeline.Build(action);
+
+            // First call fails -> Retry logs, breaker records failure and opens
+            await Assert.ThrowsAsync<Exception>(built);
+
+            // Second call while open -> throws CircuitBreakerOpenException
+            await Assert.ThrowsAsync<CircuitBreakerOpenException>(built);
+
+            Assert.Contains(observer.ObservedEvents, e => e.StartsWith("Retry:"));
+            Assert.Contains(observer.ObservedEvents, e => e.Contains("RetryPolicy:Failure"));
+            Assert.Contains(observer.ObservedEvents, e => e.Contains("CircuitOpened"));
+        }
+
+        [Fact]
+        public async Task Build_Should_Pass_Observer_To_RetryPolicy()
+        {
+            // Arrange
+            var observer = new FakeObserver();
+            var options = new ResilienceOptions
             {
-                attempts++;
-                throw new Exception("Fail!");
+                Retry = new RetryPolicy(maxRetries: 2, initialDelayMs: 10, observer: observer)
             };
 
-            var wrapped = pipeline.Build(action);
+            var pipeline = new ResiliencePipeline(options);
 
-            await Assert.ThrowsAsync<Exception>(async () => await wrapped());
-            await Assert.ThrowsAsync<CircuitBreakerOpenException>(async () => await wrapped());
+            int attempt = 0;
+            Func<Task> action = async () =>
+            {
+                attempt++;
+                throw new Exception("Fail");
+            };
 
-            Assert.True(attempts >= 1);
-            Assert.Contains("RetryAttempt:1", observer.Events);
-            Assert.Contains("CircuitOpened", observer.Events);
+            // Act
+            var resilient = pipeline.Build(action);
+            await Assert.ThrowsAsync<Exception>(() => resilient());
+
+            // Assert
+            Assert.True(observer.ObservedEvents.Exists(e => e.StartsWith("Retry:")));
         }
     }
 }

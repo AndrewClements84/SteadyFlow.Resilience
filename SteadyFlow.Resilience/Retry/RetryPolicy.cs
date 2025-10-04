@@ -7,45 +7,66 @@ namespace SteadyFlow.Resilience.Retry
     public class RetryPolicy
     {
         private readonly int _maxRetries;
-        private readonly TimeSpan _initialDelay;
-        private readonly double _backoffFactor;
+        private readonly TimeSpan _baseDelay;
+        private readonly IBackoffStrategy _strategy;
         private readonly IMetricsObserver _observer;
 
-        public RetryPolicy(int maxRetries = 3, int initialDelayMs = 200, double backoffFactor = 2.0, IMetricsObserver observer = null)
+        public RetryPolicy(
+            int maxRetries = 3,
+            int initialDelayMs = 200,
+            IMetricsObserver observer = null,
+            IBackoffStrategy strategy = null)
         {
+            if (maxRetries <= 0) throw new ArgumentOutOfRangeException(nameof(maxRetries));
+            if (initialDelayMs <= 0) throw new ArgumentOutOfRangeException(nameof(initialDelayMs));
+
             _maxRetries = maxRetries;
-            _initialDelay = TimeSpan.FromMilliseconds(initialDelayMs);
-            _backoffFactor = backoffFactor;
+            _baseDelay = TimeSpan.FromMilliseconds(initialDelayMs);
+            _strategy = strategy ?? new ExponentialBackoffStrategy();
             _observer = observer;
         }
 
         public async Task<T> ExecuteAsync<T>(Func<Task<T>> action)
         {
-            var attempt = 0;
-            var delay = _initialDelay;
+            if (action == null)
+                throw new ArgumentNullException(nameof(action));
 
+            var attempt = 0;
             while (true)
             {
                 try
                 {
-                    return await action();
+                    var result = await action();
+                    _observer?.OnEvent("RetryPolicy", "Success");
+                    return result;
                 }
-                catch (Exception ex) when (attempt < _maxRetries)
+                catch (Exception ex)
                 {
                     attempt++;
                     _observer?.OnRetry(attempt, ex);
 
+                    if (attempt >= _maxRetries)
+                    {
+                        _observer?.OnEvent("RetryPolicy", "Failure");
+                        throw;
+                    }
+
+                    var delay = _strategy.GetDelay(attempt, _baseDelay);
                     await Task.Delay(delay);
-                    delay = TimeSpan.FromMilliseconds(delay.TotalMilliseconds * _backoffFactor);
                 }
             }
         }
 
-        public async Task ExecuteAsync(Func<Task> action) =>
+        public async Task ExecuteAsync(Func<Task> action)
+        {
+            if (action == null)
+                throw new ArgumentNullException(nameof(action));
+
             await ExecuteAsync(async () =>
             {
                 await action();
                 return true;
             });
+        }
     }
 }

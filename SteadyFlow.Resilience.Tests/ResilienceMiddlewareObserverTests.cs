@@ -3,8 +3,6 @@ using SteadyFlow.Resilience.AspNetCore;
 using SteadyFlow.Resilience.Retry;
 using SteadyFlow.Resilience.Policies;
 using SteadyFlow.Resilience.RateLimiting;
-using Xunit;
-using SteadyFlow.Resilience.Tests.Helpers;
 
 namespace SteadyFlow.Resilience.Tests
 {
@@ -13,33 +11,36 @@ namespace SteadyFlow.Resilience.Tests
         [Fact]
         public async Task Middleware_Should_Notify_Observer_On_Retry_And_Success()
         {
+            // Arrange
             var observer = new FakeObserver();
             var options = new ResilienceOptions
             {
                 Retry = new RetryPolicy(maxRetries: 2, initialDelayMs: 10, observer: observer)
             };
+            var pipeline = new ResiliencePipeline(options);
+
+            var middleware = new ResilienceMiddleware(
+                async (ctx) =>
+                {
+                    if (!ctx.Items.ContainsKey("retried"))
+                    {
+                        ctx.Items["retried"] = true;
+                        throw new Exception("Transient fail");
+                    }
+
+                    await ctx.Response.WriteAsync("OK");
+                },
+                pipeline
+            );
 
             var context = new DefaultHttpContext();
-            int attempts = 0;
 
-            RequestDelegate next = async ctx =>
-            {
-                attempts++;
-                if (attempts < 2)
-                    throw new Exception("Transient failure");
-
-                ctx.Response.StatusCode = 200;
-                await ctx.Response.WriteAsync("OK");
-            };
-
-            var pipeline = new ResiliencePipeline(options);
-            var middleware = new ResilienceMiddleware(next, pipeline);
-
+            // Act
             await middleware.InvokeAsync(context);
 
-            Assert.Equal(2, attempts); // failed once, retried once
-            Assert.Contains("RetryAttempt:1", observer.Events);
-            // depending on your FakeObserver, success may not be logged, but attempt is enough
+            // Assert
+            Assert.Contains(observer.ObservedEvents, e => e.StartsWith("Retry:"));
+            Assert.Contains(observer.ObservedEvents, e => e.Contains("RetryPolicy:Success"));
         }
 
         [Fact]
@@ -66,7 +67,7 @@ namespace SteadyFlow.Resilience.Tests
             // Second call should trip breaker
             await Assert.ThrowsAsync<CircuitBreakerOpenException>(() => middleware.InvokeAsync(context));
 
-            Assert.Contains("CircuitOpened", observer.Events);
+            Assert.Contains("CircuitOpened", observer.ObservedEvents);
         }
 
         [Fact]
@@ -100,7 +101,7 @@ namespace SteadyFlow.Resilience.Tests
                 throttled = true;
 
             Assert.True(throttled);
-            Assert.Contains("RateLimited:TokenBucket", observer.Events);
+            Assert.Contains("RateLimited:TokenBucket", observer.ObservedEvents);
         }
 
         [Fact]
@@ -136,7 +137,7 @@ namespace SteadyFlow.Resilience.Tests
             await Task.Delay(200); // let batch flush
 
             Assert.Equal(2, processed.Count);
-            Assert.Contains("BatchProcessed:2", observer.Events);
+            Assert.Contains("BatchProcessed:2", observer.ObservedEvents);
         }
     }
 }

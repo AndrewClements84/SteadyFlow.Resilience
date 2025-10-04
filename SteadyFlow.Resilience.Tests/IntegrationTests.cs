@@ -2,7 +2,6 @@
 using SteadyFlow.Resilience.Policies;
 using SteadyFlow.Resilience.RateLimiting;
 using SteadyFlow.Resilience.Retry;
-using SteadyFlow.Resilience.Tests.Helpers;
 
 namespace SteadyFlow.Resilience.Tests
 {
@@ -191,6 +190,38 @@ namespace SteadyFlow.Resilience.Tests
                 Assert.Contains(v, processed);
 
             Assert.Equal(CircuitState.Closed, breaker.State);
+        }
+
+        [Fact]
+        public async Task Integration_Retry_Should_Report_Observer_Events()
+        {
+            var observer = new FakeObserver();
+            var retry = new RetryPolicy(maxRetries: 2, initialDelayMs: 10, observer: observer);
+            var breaker = new CircuitBreakerPolicy(failureThreshold: 2, openDuration: TimeSpan.FromMilliseconds(200), observer);
+            var limiter = new TokenBucketRateLimiter(capacity: 1, refillRatePerSecond: 1, observer);
+
+            int attempts = 0;
+
+            Func<Task> alwaysFailing = async () =>
+            {
+                await limiter.WaitForAvailabilityAsync();
+                attempts++;
+                throw new Exception("Always fails");
+            };
+
+            // Cause enough failures to trip circuit breaker
+            await Assert.ThrowsAsync<Exception>(() => breaker.ExecuteAsync(() => retry.ExecuteAsync(alwaysFailing)));
+            await Assert.ThrowsAsync<Exception>(() => breaker.ExecuteAsync(() => retry.ExecuteAsync(alwaysFailing)));
+
+            // The breaker should now be open
+            await Assert.ThrowsAsync<CircuitBreakerOpenException>(() =>
+                breaker.ExecuteAsync(() => retry.ExecuteAsync(alwaysFailing)));
+
+            Assert.Equal(CircuitState.Open, breaker.State);
+
+            Assert.Contains(observer.ObservedEvents, e => e.StartsWith("Retry:"));
+            Assert.Contains(observer.ObservedEvents, e => e.Contains("RateLimited:TokenBucket"));
+            Assert.Contains(observer.ObservedEvents, e => e.Contains("CircuitOpened"));
         }
     }
 }
